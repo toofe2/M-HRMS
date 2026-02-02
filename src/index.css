@@ -1,0 +1,135 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --app-height: 100%;
+}
+
+html,
+body {
+  @apply overscroll-none;
+  height: var(--app-height);
+  width: 100%;
+  position: fixed;
+  overflow: hidden;
+}
+
+#root {
+  height: 100%;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Hide Safari UI components when in PWA mode */
+@media all and (display-mode: standalone) {
+  header {
+    padding-top: env(safe-area-inset-top);
+  }
+
+  footer {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+
+/* Disable text selection */
+* {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Allow text selection in inputs and textareas */
+input,
+textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* Fix for mobile orientation changes */
+@media screen and (orientation: portrait), screen and (orientation: landscape) {
+  html {
+    overflow: hidden;
+  }
+
+  body {
+    overflow: hidden;
+    position: fixed;
+    width: 100%;
+    height: 100%;
+  }
+
+  #root {
+    height: 100%;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+/* Improve notification dropdown on mobile */
+.notification-dropdown {
+  @apply fixed md:absolute inset-x-0 bottom-0 md:inset-auto md:right-0 md:top-full md:mt-2;
+  @apply bg-white shadow-xl z-50;
+  @apply rounded-t-xl md:rounded-xl;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+/* =========================================================
+   RTL Mobile Fix: prevent date/number re-ordering like 282026/01/
+   Apply globally across the whole system
+========================================================= */
+
+input[type="date"],
+input[type="datetime-local"],
+input[type="time"],
+input[type="month"],
+input[type="week"] {
+  direction: ltr !important;
+  text-align: left !important;
+  unicode-bidi: isolate !important; /* ✅ بدل plaintext */
+}
+
+/* Optional (recommended): fixes number/tel weird rendering in RTL on some mobiles */
+input[type="number"],
+input[type="tel"] {
+  direction: ltr !important;
+  text-align: left !important;
+  unicode-bidi: isolate !important; /* ✅ بدل plaintext */
+}
+
+/* =========================================================
+   Strong RTL/LTR isolation helpers (iOS Safari safe)
+========================================================= */
+
+.bidi-ltr {
+  direction: ltr !important;
+  unicode-bidi: isolate !important;
+  text-align: left !important;
+  display: inline-block;
+}
+
+.bidi-ltr-block {
+  direction: ltr !important;
+  unicode-bidi: isolate !important;
+  text-align: left !important;
+  display: block;
+}
+
+/* Date/number inputs inside RTL pages */
+.bidi-input-ltr {
+  direction: ltr !important;
+  unicode-bidi: isolate !important;
+  text-align: left !important;
+}
+
+/* iOS specific extra push */
+@supports (-webkit-touch-callout: none) {
+  .bidi-ltr,
+  .bidi-ltr-block,
+  .bidi-input-ltr {
+    direction: ltr !important;
+    unicode-bidi: isolate !important;
+  }
+}
