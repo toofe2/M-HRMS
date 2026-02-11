@@ -16,6 +16,7 @@ import {
   Users,
   Eye,
   MessageSquare,
+  Sparkles,
   XCircle,
   CalendarDays,
   Hourglass,
@@ -307,6 +308,10 @@ const TimeSheet: React.FC = () => {
   const [currentEntry, setCurrentEntry] = useState<TimesheetEntry | null>(null);
   const [isEditingEntry, setIsEditingEntry] = useState(false);
 
+  // AI rewrite state (timesheet entry description)
+  const [rewritingDescription, setRewritingDescription] = useState(false);
+  const [rewriteError, setRewriteError] = useState<string | null>(null);
+
   const [showViewModal, setShowViewModal] = useState(false);
   const [selectedTimesheet, setSelectedTimesheet] = useState<MonthlyTimesheet | null>(null);
 
@@ -432,6 +437,24 @@ const TimeSheet: React.FC = () => {
         }
       }
 
+      // Ensure we always have the latest metadata from the base table.
+      // The RPC may not include `comments` (rejection reason), so we merge it from `monthly_timesheets`.
+      if (currentTs?.id) {
+        const { data: meta, error: metaErr } = await supabase
+          .from('monthly_timesheets')
+          .select(
+            'status,total_hours,comments,submitted_at,approved_at,approved_by,rejected_at,rejected_by,updated_at'
+          )
+          .eq('id', currentTs.id)
+          .maybeSingle();
+
+        if (metaErr) {
+          console.warn('Failed to load timesheet meta (comments/status):', metaErr);
+        } else if (meta) {
+          currentTs = { ...(currentTs as any), ...(meta as any) } as any;
+        }
+      }
+
       setMonthlyTimesheet(currentTs);
 
       if (currentTs?.id) {
@@ -472,11 +495,13 @@ const TimeSheet: React.FC = () => {
       project_id: null,
     });
     setIsEditingEntry(false);
+    setRewriteError(null);
     setShowEntryModal(true);
   };
 
   const handleOpenEditEntryModal = (entry: TimesheetEntry) => {
     setCurrentEntry({ ...entry });
+    setRewriteError(null);
 
     // ✅ If user edits an entry from another month, jump to that month automatically
     const p = parseISODateParts(entry.date);
@@ -485,6 +510,63 @@ const TimeSheet: React.FC = () => {
     setIsEditingEntry(true);
     setShowEntryModal(true);
   };
+
+const handleRewriteDescription = async () => {
+  if (!currentEntry) return;
+
+  const input = (currentEntry.description || "").trim();
+  if (!input) {
+    setRewriteError("Please write a description first.");
+    return;
+  }
+
+  setRewritingDescription(true);
+  setRewriteError(null);
+
+  try {
+    // ✅ IMPORTANT: do NOT pass headers here (it can cause empty body in some environments)
+    const { data, error } = await supabase.functions.invoke("rewrite-description", {
+      body: {
+        text: input,
+        target_language: "en",
+        style: "professional_timesheet",
+      },
+    });
+
+    if (error) {
+      // try to extract server error body if present
+      const serverBody = (error as any)?.context?.body;
+      const msg =
+        serverBody?.error ||
+        serverBody?.message ||
+        (typeof serverBody === "string" ? serverBody : null) ||
+        (error as any)?.message ||
+        "Failed to rewrite description";
+      throw new Error(msg);
+    }
+
+    console.log("rewrite-description response:", data);
+
+    const rewritten = ((data?.text_out ?? data?.text) || "").toString().trim();
+    if (!rewritten) {
+      setRewriteError("AI did not return any rewritten text.");
+      return;
+    }
+
+    setCurrentEntry((prev) => (prev ? { ...prev, description: rewritten } : prev));
+
+    if (data?.warning) {
+      setRewriteError(String(data.warning));
+    } else if (data?.changed === false) {
+      setRewriteError("AI returned the same text (no changes). Try adding more context.");
+    }
+  } catch (err: any) {
+    console.error("Rewrite description error:", err);
+    setRewriteError(err?.message || "Failed to rewrite description");
+  } finally {
+    setRewritingDescription(false);
+  }
+};
 
   const handleSaveEntry = async () => {
     if (!monthlyTimesheet || !currentEntry) return;
@@ -836,7 +918,8 @@ const TimeSheet: React.FC = () => {
                   </div>
                 </div>
 
-                {monthlyTimesheet?.status === 'rejected' && monthlyTimesheet.comments && (
+                {(monthlyTimesheet?.comments &&
+                  (monthlyTimesheet?.status === 'rejected' || !!monthlyTimesheet?.rejected_at)) && (
                   <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
                     <div className="flex items-start gap-3">
                       <MessageSquare className="h-5 w-5 text-red-600 mt-0.5" />
@@ -1073,7 +1156,10 @@ const TimeSheet: React.FC = () => {
                   {isEditingEntry ? 'Edit Entry' : 'New Time Entry'}
                 </h3>
                 <button
-                  onClick={() => setShowEntryModal(false)}
+                  onClick={() => {
+                    setShowEntryModal(false);
+                    setRewriteError(null);
+                  }}
                   className="text-gray-400 hover:text-gray-700"
                   type="button"
                 >
@@ -1119,6 +1205,23 @@ const TimeSheet: React.FC = () => {
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     Description <span className="text-red-600">*</span>
                   </label>
+                  <div className="flex items-center justify-between gap-3 mb-2">
+                    <span className="text-xs text-gray-500">
+                      Tip: you can write Arabic or English — we’ll rewrite it into professional English.
+                    </span>
+
+                    <button
+                      onClick={handleRewriteDescription}
+                      disabled={rewritingDescription}
+                      className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition"
+                      type="button"
+                      title="Rewrite with AI"
+                    >
+                      <Sparkles size={16} />
+                      {rewritingDescription ? 'Rewriting...' : 'Rewrite (AI)'}
+                    </button>
+                  </div>
+
                   <textarea
                     rows={3}
                     value={currentEntry.description ?? ''}
@@ -1127,6 +1230,8 @@ const TimeSheet: React.FC = () => {
                     }
                     className="block w-full rounded-lg border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
                   />
+
+                  {rewriteError && <p className="text-sm text-red-600 mt-2">{rewriteError}</p>}
                 </div>
 
                 <div>
@@ -1150,7 +1255,10 @@ const TimeSheet: React.FC = () => {
 
               <div className="mt-8 flex justify-end gap-3">
                 <button
-                  onClick={() => setShowEntryModal(false)}
+                  onClick={() => {
+                    setShowEntryModal(false);
+                    setRewriteError(null);
+                  }}
                   className="px-5 py-2.5 text-gray-700 hover:bg-gray-100 rounded-lg transition"
                   type="button"
                 >
