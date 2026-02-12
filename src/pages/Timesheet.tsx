@@ -20,9 +20,11 @@ import {
   XCircle,
   CalendarDays,
   Hourglass,
+  Download,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../store/authStore';
+import jsPDF from 'jspdf';
 
 // ────────────────────────────────────────────────
 // Interfaces
@@ -286,6 +288,183 @@ function defaultDateForMonth(currentDate: Date) {
 }
 
 // ────────────────────────────────────────────────
+// PDF helpers
+// ────────────────────────────────────────────────
+async function urlToDataUrl(url: string): Promise<string> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('Failed to load image');
+  const blob = await res.blob();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Failed to read image'));
+    reader.onload = () => resolve(String(reader.result));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function detectImageFormat(dataUrl: string): 'PNG' | 'JPEG' {
+  if (dataUrl.startsWith('data:image/png')) return 'PNG';
+  return 'JPEG';
+}
+
+async function getImageDimensions(dataUrl: string): Promise<{ w: number; h: number } | null> {
+  try {
+    const img = new Image();
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error('Image load failed'));
+      img.src = dataUrl;
+    });
+    const w = (img as any).naturalWidth || (img as any).width || 1;
+    const h = (img as any).naturalHeight || (img as any).height || 1;
+    return { w, h };
+  } catch {
+    return null;
+  }
+}
+
+
+function safeMonthLabel(monthISO: string) {
+  const dt = new Date(monthISO);
+  return dt.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+}
+
+function drawWrappedText(
+  doc: jsPDF,
+  text: string,
+  x: number,
+  y: number,
+  maxWidth: number,
+  lineHeight: number
+) {
+  const lines = doc.splitTextToSize(text || '', maxWidth);
+  doc.text(lines, x, y);
+  return lines.length * lineHeight;
+}
+
+function drawTable(
+  doc: jsPDF,
+  rows: Array<{ date: string; hours: string; project: string; description: string }>,
+  startX: number,
+  startY: number,
+  pageWidth: number,
+  pageHeight: number
+) {
+  const marginBottom = 72;
+  const headerH = 22;
+  const cellPadX = 6;
+  const cellPadY = 6;
+  const fontSize = 10;
+  const lineH = 12;
+
+  // Column widths (balanced & readable)
+  const tableW = pageWidth - startX * 2;
+  const colDate = 88;
+  const colHours = 56;
+  const colProject = 140;
+  const colDesc = Math.max(160, tableW - colDate - colHours - colProject);
+
+  const xDate = startX;
+  const xHours = xDate + colDate;
+  const xProject = xHours + colHours;
+  const xDesc = xProject + colProject;
+  const xEnd = startX + colDate + colHours + colProject + colDesc;
+
+  const ensureSpace = (neededH: number) => {
+    if (startY + neededH <= pageHeight - marginBottom) return;
+    doc.addPage();
+    startY = 72;
+  };
+
+  const drawHeader = () => {
+    // Header background
+    doc.setFillColor(245, 245, 245);
+    doc.rect(startX, startY, xEnd - startX, headerH, 'F');
+
+    // Header text
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(fontSize);
+    doc.setTextColor(60);
+
+    const cy = startY + headerH / 2 + 3;
+    doc.text('Date', xDate + cellPadX, cy);
+    doc.text('Hours', xHours + cellPadX, cy);
+    doc.text('Project', xProject + cellPadX, cy);
+    doc.text('Description', xDesc + cellPadX, cy);
+
+    // Header border line
+    doc.setDrawColor(200);
+    doc.setLineWidth(0.8);
+    doc.line(startX, startY + headerH, xEnd, startY + headerH);
+
+    startY += headerH;
+
+    // Reset for body
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(fontSize);
+    doc.setTextColor(20);
+  };
+
+  const drawRow = (r: { date: string; hours: string; project: string; description: string }) => {
+    const dateText = r.date || '';
+    const hoursText = r.hours || '';
+    const projectText = r.project || '—';
+    const descText = r.description || '';
+
+    const projectLines = doc.splitTextToSize(projectText, colProject - cellPadX * 2);
+    const descLines = doc.splitTextToSize(descText, colDesc - cellPadX * 2);
+
+    const lines = Math.max(1, projectLines.length, descLines.length);
+    const rowH = Math.max(22, cellPadY * 2 + lines * lineH);
+
+    // New page if needed (including room for header)
+    if (startY + rowH > pageHeight - marginBottom) {
+      doc.addPage();
+      startY = 72;
+      drawHeader();
+    }
+
+    // Horizontal row line (top)
+    doc.setDrawColor(230);
+    doc.setLineWidth(0.6);
+    doc.line(startX, startY, xEnd, startY);
+
+    // Vertical lines (light)
+    doc.setDrawColor(235);
+    doc.line(xHours, startY, xHours, startY + rowH);
+    doc.line(xProject, startY, xProject, startY + rowH);
+    doc.line(xDesc, startY, xDesc, startY + rowH);
+
+    // Cell text (top-aligned)
+    const textY = startY + cellPadY + fontSize;
+
+    doc.text(dateText, xDate + cellPadX, textY);
+    doc.text(hoursText, xHours + cellPadX, textY);
+    doc.text(projectLines as any, xProject + cellPadX, textY);
+    doc.text(descLines as any, xDesc + cellPadX, textY);
+
+    startY += rowH;
+  };
+
+  // Outer border top
+  ensureSpace(headerH + 4);
+  drawHeader();
+
+  for (const r of rows) drawRow(r);
+
+  // Bottom border
+  doc.setDrawColor(200);
+  doc.setLineWidth(0.8);
+  doc.line(startX, startY, xEnd, startY);
+
+  // Left/right outer borders
+  const tableTop = startY; // not accurate for top; draw per page not needed
+  // We already draw vertical separators; outer borders per row look fine.
+  return startY + 10;
+}
+
+
+// ────────────────────────────────────────────────
 // Component
 // ────────────────────────────────────────────────
 const TimeSheet: React.FC = () => {
@@ -300,6 +479,7 @@ const TimeSheet: React.FC = () => {
   const [pendingTeamCount, setPendingTeamCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [pdfLoading, setPdfLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'my-timesheets' | 'team-timesheets'>('my-timesheets');
@@ -437,8 +617,7 @@ const TimeSheet: React.FC = () => {
         }
       }
 
-      // Ensure we always have the latest metadata from the base table.
-      // The RPC may not include `comments` (rejection reason), so we merge it from `monthly_timesheets`.
+      // ✅ Keep comments/status in sync (prevents "comments disappear" bugs)
       if (currentTs?.id) {
         const { data: meta, error: metaErr } = await supabase
           .from('monthly_timesheets')
@@ -483,6 +662,200 @@ const TimeSheet: React.FC = () => {
   }, [user, fetchData, fetchPendingApprovals]);
 
   // ────────────────────────────────────────────────
+  // PDF Download (similar layout to your screenshot)
+  // ────────────────────────────────────────────────
+  const handleDownloadPdf = useCallback(async () => {
+    if (!user?.id || !monthlyTimesheet) return;
+
+    setPdfLoading(true);
+    setError(null);
+
+    try {
+      // Employee + direct manager
+      const { data: emp, error: empErr } = await supabase
+        .from('profiles')
+        .select('first_name,last_name,direct_manager_id')
+        .eq('id', user.id)
+        .maybeSingle();
+
+      if (empErr) throw empErr;
+
+      const employeeName =
+        `${emp?.first_name ?? ''} ${emp?.last_name ?? ''}`.trim() ||
+        monthlyTimesheet.employee_name ||
+        'Employee';
+
+      let directManagerName = 'Direct Manager';
+      if (emp?.direct_manager_id) {
+        const { data: mgr, error: mgrErr } = await supabase
+          .from('profiles')
+          .select('first_name,last_name')
+          .eq('id', emp.direct_manager_id)
+          .maybeSingle();
+        if (!mgrErr && mgr) {
+          const n = `${mgr.first_name ?? ''} ${mgr.last_name ?? ''}`.trim();
+          if (n) directManagerName = n;
+        }
+      }
+
+      // Optional logo (if you already store it in system_settings.pdf_branding like payroll)
+      let logoDataUrl: string | null = null;
+      try {
+        const { data: brandingRow } = await supabase
+          .from('system_settings')
+          .select('setting_value')
+          .eq('setting_key', 'pdf_branding')
+          .maybeSingle();
+
+        if (brandingRow?.setting_value) {
+          const branding = typeof brandingRow.setting_value === 'string'
+            ? JSON.parse(brandingRow.setting_value)
+            : brandingRow.setting_value;
+
+          const logoUrl = branding?.logo_url || branding?.logoUrl;
+          if (logoUrl && typeof logoUrl === 'string') {
+            logoDataUrl = await urlToDataUrl(logoUrl);
+          } else if (branding?.logo_base64 && typeof branding.logo_base64 === 'string') {
+            logoDataUrl = branding.logo_base64.startsWith('data:')
+              ? branding.logo_base64
+              : `data:image/png;base64,${branding.logo_base64}`;
+          }
+        }
+      } catch {
+        // ignore branding errors; PDF still works without logo
+      }
+
+      const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const pageHeight = doc.internal.pageSize.getHeight();
+      const margin = 48;
+
+      // Title
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(16);
+      doc.text('Timesheet', margin, 64);
+
+      // Logo right (optional)
+      if (logoDataUrl) {
+        try {
+          const fmt = detectImageFormat(logoDataUrl);
+          const boxW = 110;
+          const boxH = 46;
+
+          const dims = await getImageDimensions(logoDataUrl);
+          let drawW = boxW;
+          let drawH = boxH;
+
+          if (dims && dims.w > 0 && dims.h > 0) {
+            const scale = Math.min(boxW / dims.w, boxH / dims.h);
+            drawW = Math.max(20, dims.w * scale);
+            drawH = Math.max(16, dims.h * scale);
+          }
+
+          const x = pageWidth - margin - drawW;
+          const yLogo = 44;
+          doc.addImage(logoDataUrl, fmt, x, yLogo, drawW, drawH);
+        } catch {
+          // ignore logo draw failures
+        }
+      }
+
+      // Info lines
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(10);
+      const monthLabel = safeMonthLabel(monthlyTimesheet.month);
+      const status = monthlyTimesheet.status || 'draft';
+
+      let y = 90;
+      doc.text(`Timesheet: ${monthLabel}`, margin, y);
+      y += 14;
+      doc.text(`Employee: ${employeeName}`, margin, y);
+      y += 14;
+      doc.text(`Status: ${status}`, margin, y);
+
+      // Divider
+      y += 12;
+      doc.setDrawColor(180);
+      doc.line(margin, y, pageWidth - margin, y);
+      y += 18;
+
+      // Table rows
+      const rows = (timesheetEntries || []).map((e) => ({
+        date: e.date,
+        hours: String(e.hours_worked ?? 0),
+        project: e.projects?.name || '—',
+        description: e.description || '',
+      }));
+
+      const afterTableY = drawTable(doc, rows, margin, y, pageWidth, pageHeight);
+
+      // Total
+      let ty = afterTableY + 10;
+      if (ty + 60 > pageHeight - 64) {
+        doc.addPage();
+        ty = 72;
+      }
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.text(`Total Hours: ${monthlyTimesheet.total_hours ?? 0}`, margin, ty);
+
+      // Signatures (as requested)
+      ty += 28;
+
+      const signatureBlockH = 96;
+      if (ty + signatureBlockH > pageHeight - 64) {
+        doc.addPage();
+        ty = 72;
+      }
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.setTextColor(20);
+      doc.text('Signed by:', margin, ty);
+      ty += 18;
+
+      // Two columns (side-by-side)
+      const gap = 24;
+      const colW = (pageWidth - margin * 2 - gap) / 2;
+      const leftX = margin;
+      const rightX = margin + colW + gap;
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(10);
+
+      const lineY = ty + 28;
+
+      // Employee
+      doc.text(`Employee Name: ${employeeName}`, leftX, ty);
+      doc.setDrawColor(60);
+      doc.setLineWidth(0.8);
+      doc.line(leftX, lineY, leftX + colW, lineY);
+      doc.setTextColor(80);
+      doc.text('Signature', leftX, lineY + 16);
+
+      // Direct Manager
+      doc.setTextColor(20);
+      doc.text(`Direct Manager Name: ${directManagerName}`, rightX, ty);
+      doc.setDrawColor(60);
+      doc.setLineWidth(0.8);
+      doc.line(rightX, lineY, rightX + colW, lineY);
+      doc.setTextColor(80);
+      doc.text('Signature', rightX, lineY + 16);
+
+      doc.setTextColor(20);
+
+      const fileName = `Timesheet_${employeeName.replace(/\s+/g, '_')}_${monthlyTimesheet.month.slice(0, 7)}.pdf`;
+      doc.save(fileName);
+    } catch (err: any) {
+      console.error('PDF error:', err);
+      setError(err?.message || 'Failed to generate PDF');
+    } finally {
+      setPdfLoading(false);
+    }
+  }, [user?.id, monthlyTimesheet, timesheetEntries]);
+
+  // ────────────────────────────────────────────────
   // Handlers
   // ────────────────────────────────────────────────
   const handleOpenAddEntryModal = () => {
@@ -511,62 +884,62 @@ const TimeSheet: React.FC = () => {
     setShowEntryModal(true);
   };
 
-const handleRewriteDescription = async () => {
-  if (!currentEntry) return;
+  const handleRewriteDescription = async () => {
+    if (!currentEntry) return;
 
-  const input = (currentEntry.description || "").trim();
-  if (!input) {
-    setRewriteError("Please write a description first.");
-    return;
-  }
-
-  setRewritingDescription(true);
-  setRewriteError(null);
-
-  try {
-    // ✅ IMPORTANT: do NOT pass headers here (it can cause empty body in some environments)
-    const { data, error } = await supabase.functions.invoke("rewrite-description", {
-      body: {
-        text: input,
-        target_language: "en",
-        style: "professional_timesheet",
-      },
-    });
-
-    if (error) {
-      // try to extract server error body if present
-      const serverBody = (error as any)?.context?.body;
-      const msg =
-        serverBody?.error ||
-        serverBody?.message ||
-        (typeof serverBody === "string" ? serverBody : null) ||
-        (error as any)?.message ||
-        "Failed to rewrite description";
-      throw new Error(msg);
-    }
-
-    console.log("rewrite-description response:", data);
-
-    const rewritten = ((data?.text_out ?? data?.text) || "").toString().trim();
-    if (!rewritten) {
-      setRewriteError("AI did not return any rewritten text.");
+    const input = (currentEntry.description || '').trim();
+    if (!input) {
+      setRewriteError('Please write a description first.');
       return;
     }
 
-    setCurrentEntry((prev) => (prev ? { ...prev, description: rewritten } : prev));
+    setRewritingDescription(true);
+    setRewriteError(null);
 
-    if (data?.warning) {
-      setRewriteError(String(data.warning));
-    } else if (data?.changed === false) {
-      setRewriteError("AI returned the same text (no changes). Try adding more context.");
+    try {
+      // ✅ IMPORTANT: do NOT pass headers here (it can cause empty body in some environments)
+      const { data, error } = await supabase.functions.invoke('rewrite-description', {
+        body: {
+          text: input,
+          target_language: 'en',
+          style: 'professional_timesheet',
+        },
+      });
+
+      if (error) {
+        // try to extract server error body if present
+        const serverBody = (error as any)?.context?.body;
+        const msg =
+          serverBody?.error ||
+          serverBody?.message ||
+          (typeof serverBody === 'string' ? serverBody : null) ||
+          (error as any)?.message ||
+          'Failed to rewrite description';
+        throw new Error(msg);
+      }
+
+      console.log('rewrite-description response:', data);
+
+      const rewritten = ((data?.text_out ?? data?.text) || '').toString().trim();
+      if (!rewritten) {
+        setRewriteError('AI did not return any rewritten text.');
+        return;
+      }
+
+      setCurrentEntry((prev) => (prev ? { ...prev, description: rewritten } : prev));
+
+      if (data?.warning) {
+        setRewriteError(String(data.warning));
+      } else if (data?.changed === false) {
+        setRewriteError('AI returned the same text (no changes). Try adding more context.');
+      }
+    } catch (err: any) {
+      console.error('Rewrite description error:', err);
+      setRewriteError(err?.message || 'Failed to rewrite description');
+    } finally {
+      setRewritingDescription(false);
     }
-  } catch (err: any) {
-    console.error("Rewrite description error:", err);
-    setRewriteError(err?.message || "Failed to rewrite description");
-  } finally {
-    setRewritingDescription(false);
-  }
-};
+  };
 
   const handleSaveEntry = async () => {
     if (!monthlyTimesheet || !currentEntry) return;
@@ -942,16 +1315,29 @@ const handleRewriteDescription = async () => {
                   <div className="space-y-6">
                     <div className="flex items-center justify-between">
                       <h4 className="text-lg font-semibold text-gray-800">Time Entries</h4>
-                      {canEditTimesheet && (
+                      <div className="flex items-center gap-2">
                         <button
-                          onClick={handleOpenAddEntryModal}
-                          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+                          onClick={handleDownloadPdf}
+                          disabled={pdfLoading || (monthlyTimesheet?.total_hours ?? 0) <= 0}
+                          className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-800 rounded-lg hover:bg-gray-200 disabled:opacity-50 transition"
                           type="button"
+                          title="Download PDF"
                         >
-                          <Plus size={16} />
-                          Add Entry
+                          <Download size={16} />
+                          {pdfLoading ? 'Preparing PDF...' : 'Download PDF'}
                         </button>
-                      )}
+
+                        {canEditTimesheet && (
+                          <button
+                            onClick={handleOpenAddEntryModal}
+                            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+                            type="button"
+                          >
+                            <Plus size={16} />
+                            Add Entry
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     {timesheetEntries.length === 0 ? (
