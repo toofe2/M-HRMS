@@ -1,67 +1,48 @@
 // src/lib/imageUpload.ts
 import { supabase } from './supabase';
 
-export interface UploadResult {
+export interface UploadProfileImageResult {
   url: string;
   path: string;
 }
 
-export const uploadProfileImage = async (file: File, userId: string): Promise<UploadResult> => {
-  try {
-    if (!file.type.startsWith('image/')) throw new Error('File must be an image');
-    if (file.size > 5 * 1024 * 1024) throw new Error('File size must be less than 5MB');
+export async function uploadProfileImage(file: File, userId: string): Promise<UploadProfileImageResult> {
+  if (!file) throw new Error('No file selected');
+  if (!userId) throw new Error('User is not authenticated');
 
-    const fileExt = (file.name.split('.').pop() || 'jpg').toLowerCase();
-    const fileName = `${userId}/${Date.now()}.${fileExt}`;
+  const fileExt = file.name.split('.').pop()?.toLowerCase() || 'png';
+  const safeExt = fileExt.replace(/[^a-z0-9]/gi, '') || 'png';
+  const fileName = `${Date.now()}-${crypto.randomUUID()}.${safeExt}`;
+  const filePath = `${userId}/${fileName}`;
 
-    // (اختياري) تأكيد وجود session
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    if (!session?.user?.id) throw new Error('User not authenticated');
-
-    const { data, error } = await supabase.storage.from('profile-images').upload(fileName, file, {
+  const { error: uploadError } = await supabase.storage
+    .from('profile-images')
+    .upload(filePath, file, {
       cacheControl: '3600',
       upsert: false,
-      contentType: file.type,
+      contentType: file.type || 'image/png',
     });
 
-    if (error) throw error;
-
-    const {
-      data: { publicUrl },
-    } = supabase.storage.from('profile-images').getPublicUrl(data.path);
-
-    return { url: publicUrl, path: data.path };
-  } catch (error: any) {
-    console.error('Upload error:', error);
-    throw new Error(error?.message || 'Failed to upload image');
+  if (uploadError) {
+    console.error('Upload error:', uploadError);
+    throw new Error(uploadError.message || 'Failed to upload image');
   }
-};
 
-export const deleteProfileImage = async (path: string): Promise<void> => {
-  try {
-    // 🔴 مهم جداً: نظّف المسار قبل الحذف
-    // Supabase يريد فقط اسم الملف داخل الـ bucket
-    const cleanPath = path
-      .replace(/^\/+/, '')
-      .replace(/^profile-images\//, '');
+  const { data } = supabase.storage.from('profile-images').getPublicUrl(filePath);
 
-    console.log('Deleting image path:', cleanPath);
+  return {
+    url: data.publicUrl,
+    path: filePath,
+  };
+}
 
-    // تأكيد الجلسة (حتى يتأكد إرسال Authorization)
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.user?.id) {
-      throw new Error('User not authenticated');
-    }
+export async function deleteProfileImage(path: string) {
+  if (!path) return;
 
-    const { error } = await supabase.storage
-      .from('profile-images')
-      .remove([cleanPath]);
+  const { error } = await supabase.storage.from('profile-images').remove([path]);
 
-    if (error) throw error;
-  } catch (error: any) {
-    console.error('Delete error:', error);
-    throw new Error(error.message || 'Failed to delete image');
+  if (error) {
+    console.error('Delete image error:', error);
+    throw new Error(error.message || 'Failed to remove image');
   }
-};
+}
