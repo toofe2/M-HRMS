@@ -997,11 +997,12 @@ export default function PersonalInfo() {
               </button>
             </div>
 
-            <ImageUploader
-              onSuccess={handleImageUploadSuccess}
-              onError={handleImageUploadError}
-              maxSize={5}
-            />
+           <ImageUploader
+  userId={user?.id || ''}
+  onSuccess={handleImageUploadSuccess}
+  onError={handleImageUploadError}
+  maxSize={5}
+/>
 
             <div className="mt-4 flex justify-end">
               <button
