@@ -1,7 +1,8 @@
 import React, { useState, useRef } from 'react';
-import { Camera, Upload, X, Loader2, AlertCircle } from 'lucide-react';
+import { Upload, Loader2 } from 'lucide-react';
 
 interface ImageUploaderProps {
+  userId: string;
   onSuccess: (result: { url: string; path: string }) => void;
   onError: (error: string) => void;
   maxSize?: number; // in MB
@@ -11,6 +12,7 @@ interface ImageUploaderProps {
 }
 
 export default function ImageUploader({
+  userId,
   onSuccess,
   onError,
   maxSize = 5,
@@ -63,16 +65,14 @@ export default function ImageUploader({
 
   const uploadFile = async (file: File) => {
     setUploading(true);
-    
+
     try {
-      const { uploadProfileImage } = await import('../lib/imageUpload');
-      const { user } = await import('../store/authStore').then(m => m.useAuthStore.getState());
-      
-      if (!user?.id) {
+      if (!userId) {
         throw new Error('User not authenticated');
       }
 
-      const result = await uploadProfileImage(file, user.id);
+      const { uploadProfileImage } = await import('../lib/imageUpload');
+      const result = await uploadProfileImage(file, userId);
       onSuccess(result);
     } catch (error: any) {
       onError(error.message || 'Upload failed');
@@ -89,7 +89,7 @@ export default function ImageUploader({
         </div>
       ) : (
         <div
-          className={`border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors ${
+          className={`cursor-pointer rounded-lg border-2 border-dashed p-6 text-center transition-colors ${
             dragOver
               ? 'border-blue-500 bg-blue-50'
               : 'border-gray-300 hover:border-gray-400'
@@ -104,17 +104,17 @@ export default function ImageUploader({
         >
           {uploading ? (
             <div className="flex flex-col items-center">
-              <Loader2 className="h-8 w-8 text-blue-500 animate-spin mb-2" />
+              <Loader2 className="mb-2 h-8 w-8 animate-spin text-blue-500" />
               <p className="text-sm text-gray-600">Uploading...</p>
             </div>
           ) : (
             <div className="flex flex-col items-center">
-              <Upload className="h-8 w-8 text-gray-400 mb-2" />
-              <p className="text-sm text-gray-600 mb-1">
+              <Upload className="mb-2 h-8 w-8 text-gray-400" />
+              <p className="mb-1 text-sm text-gray-600">
                 Click to upload or drag and drop
               </p>
               <p className="text-xs text-gray-500">
-                Max {maxSize}MB • {acceptedTypes.map(type => type.split('/')[1]).join(', ')}
+                Max {maxSize}MB • {acceptedTypes.map((type) => type.split('/')[1]).join(', ')}
               </p>
             </div>
           )}
