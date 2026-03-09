@@ -21,10 +21,12 @@ import {
   CalendarDays,
   Hourglass,
   Download,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../store/authStore';
 import jsPDF from 'jspdf';
+import * as XLSX from 'xlsx';
 
 // ────────────────────────────────────────────────
 // Interfaces
@@ -79,18 +81,12 @@ interface PendingApproval {
   approval_action_created_at?: string;
 }
 
-// ────────────────────────────────────────────────
-// RTL / iPhone date render helper
-// ────────────────────────────────────────────────
 const LTR = ({ children }: { children: React.ReactNode }) => (
   <span dir="ltr" style={{ unicodeBidi: 'isolate' as any }}>
     {children}
   </span>
 );
 
-// ────────────────────────────────────────────────
-// Date helpers for mobile selects
-// ────────────────────────────────────────────────
 function parseISODateParts(iso: string): { yyyy: string; mm: string; dd: string } | null {
   if (!iso || typeof iso !== 'string') return null;
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
@@ -128,15 +124,6 @@ function clampToValid(p: { yyyy: string; mm: string; dd: string }) {
   return { yyyy: String(y), mm: String(m).padStart(2, '0'), dd: String(d).padStart(2, '0') };
 }
 
-/**
- * ResponsiveDateInput
- * - Desktop: native <input type="date">
- * - Mobile: 3 selects (Day / Month / Year)
- *
- * ✅ Important per your request:
- * - NO min restriction (user can pick ANY date)
- * - All days shown (nice/ordered), month/year changes are effective
- */
 function ResponsiveDateInput({
   label,
   value,
@@ -152,7 +139,6 @@ function ResponsiveDateInput({
   yearFrom: number;
   yearTo: number;
 }) {
-  // Desktop
   if (!isMobile) {
     return (
       <div>
@@ -172,7 +158,6 @@ function ResponsiveDateInput({
     );
   }
 
-  // Mobile
   const today = new Date();
   const fallback = {
     yyyy: String(today.getFullYear()),
@@ -186,7 +171,6 @@ function ResponsiveDateInput({
   const y = Number(safe.yyyy);
   const m = Number(safe.mm);
   const d = Number(safe.dd);
-
   const maxDay = daysInMonth(y, m);
 
   const years: number[] = [];
@@ -204,7 +188,6 @@ function ResponsiveDateInput({
       </label>
 
       <div className="grid grid-cols-3 gap-2" dir="ltr" style={{ unicodeBidi: 'isolate' as any }}>
-        {/* Day */}
         <select
           aria-label={`${label} Day`}
           value={d}
@@ -223,7 +206,6 @@ function ResponsiveDateInput({
           ))}
         </select>
 
-        {/* Month */}
         <select
           aria-label={`${label} Month`}
           value={m}
@@ -246,7 +228,6 @@ function ResponsiveDateInput({
           ))}
         </select>
 
-        {/* Year */}
         <select
           aria-label={`${label} Year`}
           value={y}
@@ -279,7 +260,7 @@ function ResponsiveDateInput({
 
 function defaultDateForMonth(currentDate: Date) {
   const y = currentDate.getFullYear();
-  const m = currentDate.getMonth() + 1; // 1..12
+  const m = currentDate.getMonth() + 1;
   const today = new Date();
   const day = y === today.getFullYear() && m === today.getMonth() + 1 ? today.getDate() : 1;
   const max = daysInMonth(y, m);
@@ -287,9 +268,6 @@ function defaultDateForMonth(currentDate: Date) {
   return `${y}-${String(m).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
 }
 
-// ────────────────────────────────────────────────
-// PDF helpers
-// ────────────────────────────────────────────────
 async function urlToDataUrl(url: string): Promise<string> {
   const res = await fetch(url);
   if (!res.ok) throw new Error('Failed to load image');
@@ -323,23 +301,9 @@ async function getImageDimensions(dataUrl: string): Promise<{ w: number; h: numb
   }
 }
 
-
 function safeMonthLabel(monthISO: string) {
   const dt = new Date(monthISO);
   return dt.toLocaleString('en-US', { month: 'long', year: 'numeric' });
-}
-
-function drawWrappedText(
-  doc: jsPDF,
-  text: string,
-  x: number,
-  y: number,
-  maxWidth: number,
-  lineHeight: number
-) {
-  const lines = doc.splitTextToSize(text || '', maxWidth);
-  doc.text(lines, x, y);
-  return lines.length * lineHeight;
 }
 
 function drawTable(
@@ -357,7 +321,6 @@ function drawTable(
   const fontSize = 10;
   const lineH = 12;
 
-  // Column widths (balanced & readable)
   const tableW = pageWidth - startX * 2;
   const colDate = 88;
   const colHours = 56;
@@ -377,11 +340,9 @@ function drawTable(
   };
 
   const drawHeader = () => {
-    // Header background
     doc.setFillColor(245, 245, 245);
     doc.rect(startX, startY, xEnd - startX, headerH, 'F');
 
-    // Header text
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(fontSize);
     doc.setTextColor(60);
@@ -392,14 +353,12 @@ function drawTable(
     doc.text('Project', xProject + cellPadX, cy);
     doc.text('Description', xDesc + cellPadX, cy);
 
-    // Header border line
     doc.setDrawColor(200);
     doc.setLineWidth(0.8);
     doc.line(startX, startY + headerH, xEnd, startY + headerH);
 
     startY += headerH;
 
-    // Reset for body
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(fontSize);
     doc.setTextColor(20);
@@ -417,25 +376,21 @@ function drawTable(
     const lines = Math.max(1, projectLines.length, descLines.length);
     const rowH = Math.max(22, cellPadY * 2 + lines * lineH);
 
-    // New page if needed (including room for header)
     if (startY + rowH > pageHeight - marginBottom) {
       doc.addPage();
       startY = 72;
       drawHeader();
     }
 
-    // Horizontal row line (top)
     doc.setDrawColor(230);
     doc.setLineWidth(0.6);
     doc.line(startX, startY, xEnd, startY);
 
-    // Vertical lines (light)
     doc.setDrawColor(235);
     doc.line(xHours, startY, xHours, startY + rowH);
     doc.line(xProject, startY, xProject, startY + rowH);
     doc.line(xDesc, startY, xDesc, startY + rowH);
 
-    // Cell text (top-aligned)
     const textY = startY + cellPadY + fontSize;
 
     doc.text(dateText, xDate + cellPadX, textY);
@@ -446,27 +401,18 @@ function drawTable(
     startY += rowH;
   };
 
-  // Outer border top
   ensureSpace(headerH + 4);
   drawHeader();
 
   for (const r of rows) drawRow(r);
 
-  // Bottom border
   doc.setDrawColor(200);
   doc.setLineWidth(0.8);
   doc.line(startX, startY, xEnd, startY);
 
-  // Left/right outer borders
-  const tableTop = startY; // not accurate for top; draw per page not needed
-  // We already draw vertical separators; outer borders per row look fine.
   return startY + 10;
 }
 
-
-// ────────────────────────────────────────────────
-// Component
-// ────────────────────────────────────────────────
 const TimeSheet: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuthStore();
@@ -480,6 +426,7 @@ const TimeSheet: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [pdfLoading, setPdfLoading] = useState(false);
+  const [excelLoading, setExcelLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'my-timesheets' | 'team-timesheets'>('my-timesheets');
@@ -488,7 +435,6 @@ const TimeSheet: React.FC = () => {
   const [currentEntry, setCurrentEntry] = useState<TimesheetEntry | null>(null);
   const [isEditingEntry, setIsEditingEntry] = useState(false);
 
-  // AI rewrite state (timesheet entry description)
   const [rewritingDescription, setRewritingDescription] = useState(false);
   const [rewriteError, setRewriteError] = useState<string | null>(null);
 
@@ -508,14 +454,9 @@ const TimeSheet: React.FC = () => {
     monthlyTimesheet?.status === 'draft' || monthlyTimesheet?.status === 'rejected';
 
   const isMobile = useMemo(() => isMobileUA(), []);
-
-  // years range for picker: allow wide selection (any date)
   const yearFrom = useMemo(() => new Date().getFullYear() - 5, []);
   const yearTo = useMemo(() => new Date().getFullYear() + 5, []);
 
-  // ────────────────────────────────────────────────
-  // Data Fetching
-  // ────────────────────────────────────────────────
   const fetchPendingApprovals = useCallback(async () => {
     if (!user?.id) return;
     try {
@@ -617,7 +558,6 @@ const TimeSheet: React.FC = () => {
         }
       }
 
-      // ✅ Keep comments/status in sync (prevents "comments disappear" bugs)
       if (currentTs?.id) {
         const { data: meta, error: metaErr } = await supabase
           .from('monthly_timesheets')
@@ -661,9 +601,43 @@ const TimeSheet: React.FC = () => {
     }
   }, [user, fetchData, fetchPendingApprovals]);
 
-  // ────────────────────────────────────────────────
-  // PDF Download (similar layout to your screenshot)
-  // ────────────────────────────────────────────────
+  const getEmployeeAndManagerNames = useCallback(async () => {
+    if (!user?.id || !monthlyTimesheet) {
+      return {
+        employeeName: monthlyTimesheet?.employee_name || 'Employee',
+        directManagerName: 'Direct Manager',
+      };
+    }
+
+    const { data: emp, error: empErr } = await supabase
+      .from('profiles')
+      .select('first_name,last_name,direct_manager_id')
+      .eq('id', user.id)
+      .maybeSingle();
+
+    if (empErr) throw empErr;
+
+    const employeeName =
+      `${emp?.first_name ?? ''} ${emp?.last_name ?? ''}`.trim() ||
+      monthlyTimesheet.employee_name ||
+      'Employee';
+
+    let directManagerName = 'Direct Manager';
+    if (emp?.direct_manager_id) {
+      const { data: mgr, error: mgrErr } = await supabase
+        .from('profiles')
+        .select('first_name,last_name')
+        .eq('id', emp.direct_manager_id)
+        .maybeSingle();
+      if (!mgrErr && mgr) {
+        const n = `${mgr.first_name ?? ''} ${mgr.last_name ?? ''}`.trim();
+        if (n) directManagerName = n;
+      }
+    }
+
+    return { employeeName, directManagerName };
+  }, [user?.id, monthlyTimesheet]);
+
   const handleDownloadPdf = useCallback(async () => {
     if (!user?.id || !monthlyTimesheet) return;
 
@@ -671,34 +645,8 @@ const TimeSheet: React.FC = () => {
     setError(null);
 
     try {
-      // Employee + direct manager
-      const { data: emp, error: empErr } = await supabase
-        .from('profiles')
-        .select('first_name,last_name,direct_manager_id')
-        .eq('id', user.id)
-        .maybeSingle();
+      const { employeeName, directManagerName } = await getEmployeeAndManagerNames();
 
-      if (empErr) throw empErr;
-
-      const employeeName =
-        `${emp?.first_name ?? ''} ${emp?.last_name ?? ''}`.trim() ||
-        monthlyTimesheet.employee_name ||
-        'Employee';
-
-      let directManagerName = 'Direct Manager';
-      if (emp?.direct_manager_id) {
-        const { data: mgr, error: mgrErr } = await supabase
-          .from('profiles')
-          .select('first_name,last_name')
-          .eq('id', emp.direct_manager_id)
-          .maybeSingle();
-        if (!mgrErr && mgr) {
-          const n = `${mgr.first_name ?? ''} ${mgr.last_name ?? ''}`.trim();
-          if (n) directManagerName = n;
-        }
-      }
-
-      // Optional logo (if you already store it in system_settings.pdf_branding like payroll)
       let logoDataUrl: string | null = null;
       try {
         const { data: brandingRow } = await supabase
@@ -722,7 +670,7 @@ const TimeSheet: React.FC = () => {
           }
         }
       } catch {
-        // ignore branding errors; PDF still works without logo
+        // ignore branding errors
       }
 
       const doc = new jsPDF({ unit: 'pt', format: 'a4' });
@@ -730,18 +678,15 @@ const TimeSheet: React.FC = () => {
       const pageHeight = doc.internal.pageSize.getHeight();
       const margin = 48;
 
-      // Title
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(16);
       doc.text('Timesheet', margin, 64);
 
-      // Logo right (optional)
       if (logoDataUrl) {
         try {
           const fmt = detectImageFormat(logoDataUrl);
           const boxW = 110;
           const boxH = 46;
-
           const dims = await getImageDimensions(logoDataUrl);
           let drawW = boxW;
           let drawH = boxH;
@@ -756,30 +701,26 @@ const TimeSheet: React.FC = () => {
           const yLogo = 44;
           doc.addImage(logoDataUrl, fmt, x, yLogo, drawW, drawH);
         } catch {
-          // ignore logo draw failures
+          // ignore logo errors
         }
       }
 
-      // Info lines
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(10);
-      const monthLabel = safeMonthLabel(monthlyTimesheet.month);
+      const monthLabelText = safeMonthLabel(monthlyTimesheet.month);
       const status = monthlyTimesheet.status || 'draft';
 
       let y = 90;
-      doc.text(`Timesheet: ${monthLabel}`, margin, y);
+      doc.text(`Timesheet: ${monthLabelText}`, margin, y);
       y += 14;
       doc.text(`Employee: ${employeeName}`, margin, y);
       y += 14;
       doc.text(`Status: ${status}`, margin, y);
-
-      // Divider
       y += 12;
       doc.setDrawColor(180);
       doc.line(margin, y, pageWidth - margin, y);
       y += 18;
 
-      // Table rows
       const rows = (timesheetEntries || []).map((e) => ({
         date: e.date,
         hours: String(e.hours_worked ?? 0),
@@ -789,7 +730,6 @@ const TimeSheet: React.FC = () => {
 
       const afterTableY = drawTable(doc, rows, margin, y, pageWidth, pageHeight);
 
-      // Total
       let ty = afterTableY + 10;
       if (ty + 60 > pageHeight - 64) {
         doc.addPage();
@@ -800,9 +740,7 @@ const TimeSheet: React.FC = () => {
       doc.setFontSize(10);
       doc.text(`Total Hours: ${monthlyTimesheet.total_hours ?? 0}`, margin, ty);
 
-      // Signatures (as requested)
       ty += 28;
-
       const signatureBlockH = 96;
       if (ty + signatureBlockH > pageHeight - 64) {
         doc.addPage();
@@ -815,18 +753,14 @@ const TimeSheet: React.FC = () => {
       doc.text('Signed by:', margin, ty);
       ty += 18;
 
-      // Two columns (side-by-side)
       const gap = 24;
       const colW = (pageWidth - margin * 2 - gap) / 2;
       const leftX = margin;
       const rightX = margin + colW + gap;
+      const lineY = ty + 28;
 
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(10);
-
-      const lineY = ty + 28;
-
-      // Employee
       doc.text(`Employee Name: ${employeeName}`, leftX, ty);
       doc.setDrawColor(60);
       doc.setLineWidth(0.8);
@@ -834,7 +768,6 @@ const TimeSheet: React.FC = () => {
       doc.setTextColor(80);
       doc.text('Signature', leftX, lineY + 16);
 
-      // Direct Manager
       doc.setTextColor(20);
       doc.text(`Direct Manager Name: ${directManagerName}`, rightX, ty);
       doc.setDrawColor(60);
@@ -842,7 +775,6 @@ const TimeSheet: React.FC = () => {
       doc.line(rightX, lineY, rightX + colW, lineY);
       doc.setTextColor(80);
       doc.text('Signature', rightX, lineY + 16);
-
       doc.setTextColor(20);
 
       const fileName = `Timesheet_${employeeName.replace(/\s+/g, '_')}_${monthlyTimesheet.month.slice(0, 7)}.pdf`;
@@ -853,13 +785,79 @@ const TimeSheet: React.FC = () => {
     } finally {
       setPdfLoading(false);
     }
-  }, [user?.id, monthlyTimesheet, timesheetEntries]);
+  }, [user?.id, monthlyTimesheet, timesheetEntries, getEmployeeAndManagerNames]);
 
-  // ────────────────────────────────────────────────
-  // Handlers
-  // ────────────────────────────────────────────────
+  const handleDownloadExcel = useCallback(async () => {
+    if (!monthlyTimesheet) return;
+
+    setExcelLoading(true);
+    setError(null);
+
+    try {
+      const { employeeName, directManagerName } = await getEmployeeAndManagerNames();
+      const monthLabelText = safeMonthLabel(monthlyTimesheet.month);
+
+      const summaryRows = [
+        ['Timesheet Month', monthLabelText],
+        ['Employee Name', employeeName],
+        ['Employee Email', user?.email || monthlyTimesheet.employee_email || ''],
+        ['Status', monthlyTimesheet.status || 'draft'],
+        ['Total Hours', Number(monthlyTimesheet.total_hours || 0)],
+        ['Direct Manager', directManagerName],
+        ['Comments', monthlyTimesheet.comments || ''],
+        ['Submitted At', monthlyTimesheet.submitted_at || ''],
+        ['Approved At', monthlyTimesheet.approved_at || ''],
+        ['Rejected At', monthlyTimesheet.rejected_at || ''],
+      ];
+
+      const entryRows = timesheetEntries.map((entry, index) => ({
+        '#': index + 1,
+        Date: entry.date,
+        Hours: Number(entry.hours_worked || 0),
+        Project: entry.projects?.name || '',
+        Description: entry.description || '',
+        Month: monthlyTimesheet.month,
+        Status: monthlyTimesheet.status,
+      }));
+
+      const workbook = XLSX.utils.book_new();
+
+      const summarySheet = XLSX.utils.aoa_to_sheet(summaryRows);
+      summarySheet['!cols'] = [{ wch: 22 }, { wch: 40 }];
+
+      const entriesSheet = XLSX.utils.json_to_sheet(entryRows.length ? entryRows : [{
+        '#': '',
+        Date: '',
+        Hours: '',
+        Project: '',
+        Description: '',
+        Month: monthlyTimesheet.month,
+        Status: monthlyTimesheet.status,
+      }]);
+      entriesSheet['!cols'] = [
+        { wch: 6 },
+        { wch: 14 },
+        { wch: 10 },
+        { wch: 24 },
+        { wch: 60 },
+        { wch: 14 },
+        { wch: 14 },
+      ];
+
+      XLSX.utils.book_append_sheet(workbook, summarySheet, 'Summary');
+      XLSX.utils.book_append_sheet(workbook, entriesSheet, 'Entries');
+
+      const fileName = `Timesheet_${employeeName.replace(/\s+/g, '_')}_${monthlyTimesheet.month.slice(0, 7)}.xlsx`;
+      XLSX.writeFile(workbook, fileName);
+    } catch (err: any) {
+      console.error('Excel error:', err);
+      setError(err?.message || 'Failed to generate Excel file');
+    } finally {
+      setExcelLoading(false);
+    }
+  }, [monthlyTimesheet, timesheetEntries, getEmployeeAndManagerNames, user?.email]);
+
   const handleOpenAddEntryModal = () => {
-    // ✅ Default date matches the currently selected month (e.g., if you are on December, it defaults to December)
     const base = defaultDateForMonth(currentDate);
     setCurrentEntry({
       date: base,
@@ -875,18 +873,14 @@ const TimeSheet: React.FC = () => {
   const handleOpenEditEntryModal = (entry: TimesheetEntry) => {
     setCurrentEntry({ ...entry });
     setRewriteError(null);
-
-    // ✅ If user edits an entry from another month, jump to that month automatically
     const p = parseISODateParts(entry.date);
     if (p) setCurrentDate(new Date(Number(p.yyyy), Number(p.mm) - 1, 1));
-
     setIsEditingEntry(true);
     setShowEntryModal(true);
   };
 
   const handleRewriteDescription = async () => {
     if (!currentEntry) return;
-
     const input = (currentEntry.description || '').trim();
     if (!input) {
       setRewriteError('Please write a description first.');
@@ -897,7 +891,6 @@ const TimeSheet: React.FC = () => {
     setRewriteError(null);
 
     try {
-      // ✅ IMPORTANT: do NOT pass headers here (it can cause empty body in some environments)
       const { data, error } = await supabase.functions.invoke('rewrite-description', {
         body: {
           text: input,
@@ -907,7 +900,6 @@ const TimeSheet: React.FC = () => {
       });
 
       if (error) {
-        // try to extract server error body if present
         const serverBody = (error as any)?.context?.body;
         const msg =
           serverBody?.error ||
@@ -917,8 +909,6 @@ const TimeSheet: React.FC = () => {
           'Failed to rewrite description';
         throw new Error(msg);
       }
-
-      console.log('rewrite-description response:', data);
 
       const rewritten = ((data?.text_out ?? data?.text) || '').toString().trim();
       if (!rewritten) {
@@ -1166,9 +1156,6 @@ const TimeSheet: React.FC = () => {
     setCurrentDate((prev) => new Date(prev.getFullYear(), prev.getMonth() + delta, 1));
   };
 
-  // ────────────────────────────────────────────────
-  // Helpers
-  // ────────────────────────────────────────────────
   const getStatusBadgeColor = (status: string = 'draft') => {
     const colors: Record<string, string> = {
       draft: 'bg-yellow-100 text-yellow-800',
@@ -1187,9 +1174,6 @@ const TimeSheet: React.FC = () => {
     return dt.toLocaleDateString('en-US', { weekday: 'short', day: '2-digit', month: 'short' });
   };
 
-  // ────────────────────────────────────────────────
-  // Render
-  // ────────────────────────────────────────────────
   if (!user) {
     return <div className="p-8 text-center">Please sign in to view timesheets</div>;
   }
@@ -1247,7 +1231,6 @@ const TimeSheet: React.FC = () => {
               </div>
             </div>
 
-            {/* My Timesheet Tab */}
             {activeTab === 'my-timesheets' && (
               <>
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-6 mb-8">
@@ -1315,7 +1298,7 @@ const TimeSheet: React.FC = () => {
                   <div className="space-y-6">
                     <div className="flex items-center justify-between">
                       <h4 className="text-lg font-semibold text-gray-800">Time Entries</h4>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap justify-end">
                         <button
                           onClick={handleDownloadPdf}
                           disabled={pdfLoading || (monthlyTimesheet?.total_hours ?? 0) <= 0}
@@ -1325,6 +1308,17 @@ const TimeSheet: React.FC = () => {
                         >
                           <Download size={16} />
                           {pdfLoading ? 'Preparing PDF...' : 'Download PDF'}
+                        </button>
+
+                        <button
+                          onClick={handleDownloadExcel}
+                          disabled={excelLoading || (monthlyTimesheet?.total_hours ?? 0) <= 0}
+                          className="flex items-center gap-2 px-4 py-2 bg-emerald-100 text-emerald-800 rounded-lg hover:bg-emerald-200 disabled:opacity-50 transition"
+                          type="button"
+                          title="Download Excel"
+                        >
+                          <FileSpreadsheet size={16} />
+                          {excelLoading ? 'Preparing Excel...' : 'Download Excel'}
                         </button>
 
                         {canEditTimesheet && (
@@ -1426,7 +1420,6 @@ const TimeSheet: React.FC = () => {
               </>
             )}
 
-            {/* Team Timesheets Tab */}
             {activeTab === 'team-timesheets' && (
               <div className="space-y-8">
                 <h4 className="text-xl font-semibold text-gray-900">Team Timesheets</h4>
@@ -1533,7 +1526,6 @@ const TimeSheet: React.FC = () => {
           </div>
         </div>
 
-        {/* Add/Edit Entry Modal */}
         {showEntryModal && currentEntry && (
           <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-xl max-w-md w-full p-6 shadow-2xl">
@@ -1562,8 +1554,6 @@ const TimeSheet: React.FC = () => {
                   yearTo={yearTo}
                   onChange={(nextISO) => {
                     setCurrentEntry((prev) => (prev ? { ...prev, date: nextISO } : null));
-
-                    // ✅ Auto-sync the page month with the selected date month (so if user picks December, header becomes December)
                     const p = parseISODateParts(nextISO);
                     if (p) setCurrentDate(new Date(Number(p.yyyy), Number(p.mm) - 1, 1));
                   }}
@@ -1664,7 +1654,6 @@ const TimeSheet: React.FC = () => {
           </div>
         )}
 
-        {/* View Timesheet Modal */}
         {showViewModal && selectedTimesheet && (
           <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-xl max-w-3xl w-full p-6 max-h-[90vh] overflow-y-auto shadow-2xl">
@@ -1784,7 +1773,6 @@ const TimeSheet: React.FC = () => {
           </div>
         )}
 
-        {/* Rejection Modal */}
         {showRejectionModal && (
           <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-xl max-w-md w-full p-6 shadow-2xl">
@@ -1839,9 +1827,6 @@ const TimeSheet: React.FC = () => {
   );
 };
 
-// ────────────────────────────────────────────────
-// TabButton Component
-// ────────────────────────────────────────────────
 function TabButton({
   tab,
   current,
