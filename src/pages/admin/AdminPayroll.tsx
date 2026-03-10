@@ -21,6 +21,8 @@ import {
   Filter,
   FileText,
   ChevronRight,
+  RotateCcw,
+  Ban,
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuthStore } from '../../store/authStore';
@@ -501,6 +503,93 @@ export default function AdminPayroll() {
     }
   };
 
+  const updateRunStatus = async (status: RunStatus, reason: string) => {
+    if (!selectedRunId) return;
+    setBusy(true);
+    setError(null);
+
+    try {
+      const noteStamp = `${new Date().toLocaleString()} — ${reason}`;
+      const nextNotes = [selectedRun?.notes, noteStamp].filter(Boolean).join('\n');
+
+      const { error } = await supabase
+        .from('payroll_runs')
+        .update({ status, notes: nextNotes, updated_at: new Date().toISOString() })
+        .eq('id', selectedRunId);
+
+      if (error) throw error;
+
+      if (status === 'cancelled') {
+        await supabase
+          .from('payroll_run_employees')
+          .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+          .eq('run_id', selectedRunId);
+      }
+
+      if (status === 'draft') {
+        await supabase
+          .from('payroll_run_employees')
+          .update({
+            status: 'draft',
+            payment_date: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('run_id', selectedRunId);
+      }
+
+      await fetchRuns();
+      await fetchRunDetails(selectedRunId);
+    } catch (e: any) {
+      console.error(e);
+      setError(e?.message || 'Failed to update run status.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const undoPaymentBatch = async (batch: PaymentBatch) => {
+    if (!selectedRunId) return;
+    const ok = window.confirm(`Undo payment batch ${batch.batch_number}? This will revert paid employees back to ready_to_pay.`);
+    if (!ok) return;
+
+    setBusy(true);
+    setError(null);
+
+    try {
+      const { error: empError } = await supabase
+        .from('payroll_run_employees')
+        .update({
+          status: 'ready_to_pay',
+          payment_date: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('run_id', batch.run_id)
+        .eq('payment_method', batch.method)
+        .eq('status', 'paid');
+      if (empError) throw empError;
+
+      const { error: batchError } = await supabase.from('payment_batches').delete().eq('id', batch.id);
+      if (batchError) throw batchError;
+
+      const noteStamp = `${new Date().toLocaleString()} — Payment batch ${batch.batch_number} was reversed before final settlement.`;
+      const nextNotes = [selectedRun?.notes, noteStamp].filter(Boolean).join('\n');
+
+      const { error: runError } = await supabase
+        .from('payroll_runs')
+        .update({ status: 'ready_to_pay', notes: nextNotes, updated_at: new Date().toISOString() })
+        .eq('id', batch.run_id);
+      if (runError) throw runError;
+
+      await fetchRuns();
+      await fetchRunDetails(batch.run_id);
+    } catch (e: any) {
+      console.error(e);
+      setError(e?.message || 'Failed to undo payment batch.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const updateEmployeePaymentMethod = async (re: RunEmployee, method: PaymentMethod) => {
     setBusy(true);
     setError(null);
@@ -691,6 +780,7 @@ export default function AdminPayroll() {
                 <option value="approved">Approved</option>
                 <option value="ready_to_pay">Ready to pay</option>
                 <option value="paid">Paid</option>
+                <option value="cancelled">Cancelled</option>
                 <option value="locked">Locked</option>
               </select>
               <Hint icon={<Filter className="h-3.5 w-3.5" />}>Optional filter</Hint>
@@ -727,6 +817,24 @@ export default function AdminPayroll() {
                 >
                   <Landmark className="h-4 w-4" />
                   Pay Bank
+                </Button>
+
+                <Button
+                  variant="warning"
+                  onClick={() => updateRunStatus('draft', 'Run reopened before payment finalization')}
+                  disabled={busy || !selectedRunId}
+                >
+                  <RotateCcw className="h-4 w-4" />
+                  Reopen Draft
+                </Button>
+
+                <Button
+                  variant="danger"
+                  onClick={() => updateRunStatus('cancelled', 'Run cancelled before final payment')}
+                  disabled={busy || !selectedRunId}
+                >
+                  <Ban className="h-4 w-4" />
+                  Cancel Run
                 </Button>
               </div>
             </div>
@@ -847,7 +955,13 @@ export default function AdminPayroll() {
             ) : tab === 'items' ? (
               <ItemsTab currency={selectedRun.currency} runEmployees={runEmployees} runItems={runItems} />
             ) : (
-              <PaymentsTab currency={selectedRun.currency} runEmployees={runEmployees} paymentBatches={paymentBatches} />
+              <PaymentsTab
+                currency={selectedRun.currency}
+                runEmployees={runEmployees}
+                paymentBatches={paymentBatches}
+                onUndoBatch={undoPaymentBatch}
+                busy={busy}
+              />
             )}
           </div>
         </Card>
@@ -1331,10 +1445,14 @@ function PaymentsTab({
   currency,
   runEmployees,
   paymentBatches,
+  onUndoBatch,
+  busy,
 }: {
   currency: string;
   runEmployees: RunEmployee[];
   paymentBatches: PaymentBatch[];
+  onUndoBatch: (batch: PaymentBatch) => void;
+  busy: boolean;
 }) {
   const paidCount = runEmployees.filter((e) => String(e.status) === 'paid').length;
   const cashCount = runEmployees.filter((e) => String(e.payment_method) === 'cash').length;
@@ -1385,6 +1503,16 @@ function PaymentsTab({
                   </div>
 
                   {b.notes ? <p className="text-sm text-gray-700 mt-2">{b.notes}</p> : null}
+                  <div className="mt-3">
+                    <button
+                      onClick={() => onUndoBatch(b)}
+                      disabled={busy}
+                      className="inline-flex items-center gap-2 rounded-lg border border-amber-200 px-3 py-2 text-xs font-semibold text-amber-700 hover:bg-amber-50 disabled:opacity-60"
+                    >
+                      <RotateCcw className="h-3.5 w-3.5" />
+                      Undo Batch
+                    </button>
+                  </div>
                   {b.attachment_url ? (
                     <p className="text-xs text-gray-500 mt-2">
                       Attachment: <span className="font-semibold text-gray-900">{b.attachment_url}</span>
@@ -1468,7 +1596,7 @@ function TabButton({ active, onClick, label }: { active: boolean; onClick: () =>
   );
 }
 
-type ButtonVariant = 'primary' | 'outline' | 'ghost' | 'success' | 'info' | 'indigo';
+type ButtonVariant = 'primary' | 'outline' | 'ghost' | 'success' | 'info' | 'indigo' | 'warning' | 'danger';
 
 function Button({
   children,
@@ -1497,6 +1625,8 @@ function Button({
     success: 'bg-green-600 text-white hover:bg-green-700 focus:ring-green-300',
     info: 'bg-blue-600 text-white hover:bg-blue-700 focus:ring-blue-300',
     indigo: 'bg-indigo-600 text-white hover:bg-indigo-700 focus:ring-indigo-300',
+    warning: 'bg-amber-500 text-white hover:bg-amber-600 focus:ring-amber-300',
+    danger: 'bg-rose-600 text-white hover:bg-rose-700 focus:ring-rose-300',
   };
 
   return (
