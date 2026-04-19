@@ -653,9 +653,8 @@ export default function Vacation() {
           action_date: new Date().toISOString(),
           comments: approved ? 'Approved' : 'Rejected',
         })
-        .eq('id', currentAction.id)
-        .select(); // ✅ مهم جداً
-
+        .eq('id', currentAction.id);
+     
       if (updateErr) throw updateErr;
 
       await Promise.all([fetchLeaveRequests(), refreshBalances()]);
