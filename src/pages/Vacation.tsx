@@ -653,7 +653,7 @@ export default function Vacation() {
           action_date: new Date().toISOString(),
           comments: approved ? 'Approved' : 'Rejected',
         })
-        .eq('id', currentAction.id);
+        .eq('id', currentAction.id)
         .select(); // ✅ مهم جداً
 
       if (updateErr) throw updateErr;
