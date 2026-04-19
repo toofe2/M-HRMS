@@ -654,6 +654,7 @@ export default function Vacation() {
           comments: approved ? 'Approved' : 'Rejected',
         })
         .eq('id', currentAction.id);
+        .select(); // ✅ مهم جداً
 
       if (updateErr) throw updateErr;
 
