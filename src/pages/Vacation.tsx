@@ -646,7 +646,7 @@ export default function Vacation() {
       if (actionFetchErr) throw actionFetchErr;
       if (!currentAction) throw new Error('No pending approval action found for you. It may have been handled already.');
 
-     const { error: updateErr } = await supabase
+    const { error: updateErr } = await supabase
   .from('approval_actions')
   .update({
     action: approved ? 'approved' : 'rejected',
@@ -657,13 +657,21 @@ export default function Vacation() {
 
 if (updateErr) throw updateErr;
 
+// فقط عند الموافقة
 if (approved) {
+  // ننتظر شوي حتى تكتمل تحديثات approval_requests -> leave_requests
+  await new Promise((resolve) => setTimeout(resolve, 800));
+
   const { error: syncErr } = await supabase.rpc('sync_approved_leaves_to_timesheet');
-  if (syncErr) throw syncErr;
+
+  if (syncErr) {
+    console.error('Timesheet sync failed:', syncErr);
+    throw new Error(`Timesheet sync failed: ${syncErr.message}`);
+  }
 }
 
 await Promise.all([fetchLeaveRequests(), refreshBalances()]);
-      setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
+setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
     } catch (err: any) {
       console.error(err);
       setError(err.message || 'Approval failed');
