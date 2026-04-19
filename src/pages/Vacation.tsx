@@ -646,18 +646,23 @@ export default function Vacation() {
       if (actionFetchErr) throw actionFetchErr;
       if (!currentAction) throw new Error('No pending approval action found for you. It may have been handled already.');
 
-      const { error: updateErr } = await supabase
-        .from('approval_actions')
-        .update({
-          action: approved ? 'approved' : 'rejected',
-          action_date: new Date().toISOString(),
-          comments: approved ? 'Approved' : 'Rejected',
-        })
-        .eq('id', currentAction.id);
-     
-      if (updateErr) throw updateErr;
+     const { error: updateErr } = await supabase
+  .from('approval_actions')
+  .update({
+    action: approved ? 'approved' : 'rejected',
+    action_date: new Date().toISOString(),
+    comments: approved ? 'Approved' : 'Rejected',
+  })
+  .eq('id', currentAction.id);
 
-      await Promise.all([fetchLeaveRequests(), refreshBalances()]);
+if (updateErr) throw updateErr;
+
+if (approved) {
+  const { error: syncErr } = await supabase.rpc('sync_approved_leaves_to_timesheet');
+  if (syncErr) throw syncErr;
+}
+
+await Promise.all([fetchLeaveRequests(), refreshBalances()]);
       setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
     } catch (err: any) {
       console.error(err);
