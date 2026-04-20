@@ -174,10 +174,11 @@ function ResponsiveDateInput({
 }: {
   label: string;
   value: string;
-  min: string;
+  min?: string;
   onChange: (nextISO: string) => void;
   isMobile: boolean;
 }) {
+  const hasMin = Boolean(min);
   const minISO = min || todayISO();
 
   // year options (no hooks)
@@ -205,7 +206,7 @@ function ResponsiveDateInput({
   }
 
   // Mobile: custom selects but show ALL days/months (as you preferred) and just disable invalid ones.
-  const minParts = parseISODateParts(minISO) || { yyyy: String(nowY), mm: '01', dd: '01' };
+  const minParts = hasMin ? (parseISODateParts(minISO) || { yyyy: String(nowY), mm: '01', dd: '01' }) : null;
 
   const rawParts =
     parseISODateParts(value) ||
@@ -226,7 +227,7 @@ function ResponsiveDateInput({
 
   let safeParts = clampToValid(rawParts);
   const safeISO = toISODate(safeParts);
-  if (compareISO(safeISO, minISO) < 0) {
+  if (hasMin && minParts && compareISO(safeISO, minISO) < 0) {
     safeParts = clampToValid(minParts);
   }
 
@@ -236,18 +237,20 @@ function ResponsiveDateInput({
 
   const maxDay = daysInMonth(selectedYear, selectedMonth);
 
-  const isYearDisabled = (y: number) => y < Number(minParts.yyyy);
+  const isYearDisabled = (y: number) => hasMin && minParts ? y < Number(minParts.yyyy) : false;
   const isMonthDisabled = (m: number) =>
-    selectedYear === Number(minParts.yyyy) && m < Number(minParts.mm);
+    hasMin && minParts ? (selectedYear === Number(minParts.yyyy) && m < Number(minParts.mm)) : false;
   const isDayDisabled = (d: number) =>
-    selectedYear === Number(minParts.yyyy) &&
-    selectedMonth === Number(minParts.mm) &&
-    d < Number(minParts.dd);
+    hasMin && minParts ? (
+      selectedYear === Number(minParts.yyyy) &&
+      selectedMonth === Number(minParts.mm) &&
+      d < Number(minParts.dd)
+    ) : false;
 
   const commit = (next: { yyyy: string; mm: string; dd: string }) => {
     const clamped = clampToValid(next);
     const iso = toISODate(clamped);
-    if (compareISO(iso, minISO) < 0) {
+    if (hasMin && compareISO(iso, minISO) < 0) {
       onChange(minISO);
       return;
     }
@@ -302,12 +305,12 @@ function ResponsiveDateInput({
             const y = Number(e.target.value);
             // If switching to min year, ensure month >= min month
             const newMonth =
-              y === Number(minParts.yyyy) ? Math.max(selectedMonth, Number(minParts.mm)) : selectedMonth;
+              hasMin && minParts && y === Number(minParts.yyyy) ? Math.max(selectedMonth, Number(minParts.mm)) : selectedMonth;
 
             const newMax = daysInMonth(y, newMonth);
             // If switching to min year+month, ensure day >= min day
             const newDayMin =
-              y === Number(minParts.yyyy) && newMonth === Number(minParts.mm) ? Number(minParts.dd) : 1;
+              hasMin && minParts && y === Number(minParts.yyyy) && newMonth === Number(minParts.mm) ? Number(minParts.dd) : 1;
 
             const dd = Math.min(Math.max(selectedDay, newDayMin), newMax);
 
@@ -377,6 +380,11 @@ export default function Vacation() {
   const [userOffice, setUserOffice] = useState<Office | null>(null);
 
   const [isMobile, setIsMobile] = useState(false);
+
+  const normalizedLeaveType = String(newRequest.leave_type || '').toLowerCase().trim();
+  const isSickLeave = normalizedLeaveType === 'sick' || normalizedLeaveType.includes('sick');
+  const startDateMin = isSickLeave ? undefined : todayISO();
+  const endDateMin = isSickLeave ? undefined : (newRequest.start_date || todayISO());
 
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 640px)');
@@ -699,10 +707,17 @@ setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
     try {
       const workingDays = calculateWorkingDays(newRequest.start_date, newRequest.end_date);
 
-      if (new Date(newRequest.start_date) > new Date(newRequest.end_date)) {
+      if (compareISO(newRequest.start_date, newRequest.end_date) > 0) {
         throw new Error('End date cannot be before start date');
       }
-      if (new Date(newRequest.start_date) < new Date()) {
+
+      const today = todayISO();
+
+      if (isSickLeave) {
+        if (compareISO(newRequest.start_date, today) > 0 || compareISO(newRequest.end_date, today) > 0) {
+          throw new Error('Sick leave can only be requested for today or previous dates');
+        }
+      } else if (compareISO(newRequest.start_date, today) < 0) {
         throw new Error('Cannot request leave for past dates');
       }
 
@@ -1051,7 +1066,18 @@ setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
                   <label className="block text-sm font-medium text-gray-700">Leave Type</label>
                   <select
                     value={newRequest.leave_type}
-                    onChange={(e) => setNewRequest((prev) => ({ ...prev, leave_type: e.target.value }))}
+                    onChange={(e) => {
+                      const nextLeaveType = e.target.value;
+                      const nextIsSickLeave = nextLeaveType === 'sick' || nextLeaveType.includes('sick');
+                      const today = todayISO();
+
+                      setNewRequest((prev) => ({
+                        ...prev,
+                        leave_type: nextLeaveType,
+                        start_date: nextIsSickLeave ? prev.start_date : (prev.start_date && compareISO(prev.start_date, today) >= 0 ? prev.start_date : ''),
+                        end_date: nextIsSickLeave ? prev.end_date : (prev.end_date && compareISO(prev.end_date, today) >= 0 ? prev.end_date : ''),
+                      }));
+                    }}
                     className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
                     required
                   >
@@ -1069,7 +1095,7 @@ setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
                 <ResponsiveDateInput
                   label="Start Date"
                   value={newRequest.start_date}
-                  min={todayISO()}
+                  min={startDateMin}
                   isMobile={isMobile}
                   onChange={(v) => {
                     setNewRequest((prev) => ({
@@ -1084,10 +1110,21 @@ setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
                 <ResponsiveDateInput
                   label="End Date"
                   value={newRequest.end_date}
-                  min={newRequest.start_date || todayISO()}
+                  min={endDateMin}
                   isMobile={isMobile}
-                  onChange={(v) => setNewRequest((prev) => ({ ...prev, end_date: v }))}
+                  onChange={(v) => {
+                    setNewRequest((prev) => ({
+                      ...prev,
+                      end_date: compareISO(v, prev.start_date || v) < 0 ? (prev.start_date || v) : v,
+                    }));
+                  }}
                 />
+
+                {isSickLeave && (
+                  <div className="bg-amber-50 text-amber-700 text-sm p-3 rounded-md">
+                    Sick leave can be requested for today or previous dates. Future dates are not allowed.
+                  </div>
+                )}
 
                 {workingDaysCount > 0 && (
                   <div
