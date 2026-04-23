@@ -1,5 +1,4 @@
-// src/pages/Vacation.tsx
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -74,18 +73,12 @@ interface ConfirmationDialog {
   request?: LeaveRequest;
 }
 
-/**
- * ✅ Fix for mobile/RTL date rendering:
- * - Some mobile browsers (especially iOS Safari) reorder separators like "/" inside RTL containers.
- * - We render dates as isolated LTR parts with explicit spacing and separators.
- */
 function parseISODateParts(input: string): { yyyy: string; mm: string; dd: string } | null {
   if (!input) return null;
   const pure = input.split('T')[0];
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(pure);
   if (m) return { yyyy: m[1], mm: m[2], dd: m[3] };
 
-  // fallback: try slash formats (very defensive)
   const m2 = /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/.exec(pure);
   if (!m2) return null;
   const dd = String(m2[1]).padStart(2, '0');
@@ -108,7 +101,6 @@ const DateDisplay = ({ value }: { value: string }) => {
   const parts = parseISODateParts(value);
   if (!parts) return <LTR>{formatDateSafe(value)}</LTR>;
 
-  // Render as isolated parts to prevent "/" swapping in RTL
   return (
     <span dir="ltr" style={{ unicodeBidi: 'isolate' as any }} className="inline-flex items-center gap-1 tabular-nums">
       <span>{parts.dd}</span>
@@ -120,23 +112,7 @@ const DateDisplay = ({ value }: { value: string }) => {
   );
 };
 
-function isValidDateISO(iso: string): boolean {
-  const p = parseISODateParts(iso);
-  if (!p) return false;
-  const y = Number(p.yyyy);
-  const m = Number(p.mm);
-  const d = Number(p.dd);
-  if (!y || m < 1 || m > 12 || d < 1 || d > 31) return false;
-  const dt = new Date(`${p.yyyy}-${p.mm}-${p.dd}T00:00:00`);
-  return (
-    dt.getUTCFullYear() === y &&
-    dt.getUTCMonth() + 1 === m &&
-    dt.getUTCDate() === d
-  );
-}
-
 function compareISO(a: string, b: string): number {
-  // safe because ISO yyyy-mm-dd sorts lexicographically
   if (a === b) return 0;
   return a < b ? -1 : 1;
 }
@@ -158,10 +134,7 @@ function range(n: number): number[] {
 }
 
 function monthLabel(m: number): string {
-  const labels = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
-  ];
+  const labels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   return labels[m - 1] || String(m);
 }
 
@@ -179,13 +152,12 @@ function ResponsiveDateInput({
   isMobile: boolean;
 }) {
   const hasMin = Boolean(min);
-  const minISO = min || todayISO();
+  const fallbackISO = value || min || todayISO();
 
-  // year options (no hooks)
   const nowY = new Date().getFullYear();
-  const yearOptions = [nowY, nowY + 1, nowY + 2];
+  const selectedYearBase = Number(parseISODateParts(fallbackISO)?.yyyy || nowY);
+  const yearOptions = range(7).map((offset) => selectedYearBase - 3 + offset);
 
-  // Desktop: native date input
   if (!isMobile) {
     return (
       <div>
@@ -193,7 +165,7 @@ function ResponsiveDateInput({
         <input
           type="date"
           value={value}
-          min={minISO}
+          min={min}
           onChange={(e) => onChange(e.target.value)}
           className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
           dir="ltr"
@@ -205,18 +177,13 @@ function ResponsiveDateInput({
     );
   }
 
-  // Mobile: custom selects but show ALL days/months (as you preferred) and just disable invalid ones.
-  const minParts = hasMin ? (parseISODateParts(minISO) || { yyyy: String(nowY), mm: '01', dd: '01' }) : null;
+  const minParts = hasMin ? parseISODateParts(min || '') : null;
+  const rawParts = parseISODateParts(value) || parseISODateParts(fallbackISO) || {
+    yyyy: String(nowY),
+    mm: String(new Date().getMonth() + 1).padStart(2, '0'),
+    dd: String(new Date().getDate()).padStart(2, '0'),
+  };
 
-  const rawParts =
-    parseISODateParts(value) ||
-    parseISODateParts(minISO) || {
-      yyyy: String(nowY),
-      mm: String(new Date().getMonth() + 1).padStart(2, '0'),
-      dd: String(new Date().getDate()).padStart(2, '0'),
-    };
-
-  // Clamp current parts to be >= minISO and valid calendar date
   const clampToValid = (p: { yyyy: string; mm: string; dd: string }) => {
     const y = Number(p.yyyy);
     const m = Number(p.mm);
@@ -227,31 +194,28 @@ function ResponsiveDateInput({
 
   let safeParts = clampToValid(rawParts);
   const safeISO = toISODate(safeParts);
-  if (hasMin && minParts && compareISO(safeISO, minISO) < 0) {
+  if (hasMin && minParts && compareISO(safeISO, min || '') < 0) {
     safeParts = clampToValid(minParts);
   }
 
   const selectedYear = Number(safeParts.yyyy);
   const selectedMonth = Number(safeParts.mm);
   const selectedDay = Number(safeParts.dd);
-
   const maxDay = daysInMonth(selectedYear, selectedMonth);
 
   const isYearDisabled = (y: number) => hasMin && minParts ? y < Number(minParts.yyyy) : false;
   const isMonthDisabled = (m: number) =>
-    hasMin && minParts ? (selectedYear === Number(minParts.yyyy) && m < Number(minParts.mm)) : false;
+    hasMin && minParts ? selectedYear === Number(minParts.yyyy) && m < Number(minParts.mm) : false;
   const isDayDisabled = (d: number) =>
-    hasMin && minParts ? (
-      selectedYear === Number(minParts.yyyy) &&
-      selectedMonth === Number(minParts.mm) &&
-      d < Number(minParts.dd)
-    ) : false;
+    hasMin && minParts
+      ? selectedYear === Number(minParts.yyyy) && selectedMonth === Number(minParts.mm) && d < Number(minParts.dd)
+      : false;
 
   const commit = (next: { yyyy: string; mm: string; dd: string }) => {
     const clamped = clampToValid(next);
     const iso = toISODate(clamped);
-    if (hasMin && compareISO(iso, minISO) < 0) {
-      onChange(minISO);
+    if (hasMin && min && compareISO(iso, min) < 0) {
+      onChange(min);
       return;
     }
     onChange(iso);
@@ -260,17 +224,11 @@ function ResponsiveDateInput({
   return (
     <div>
       <label className="block text-sm font-medium text-gray-700">{label}</label>
-
       <div className="mt-1 grid grid-cols-3 gap-2" dir="ltr" style={{ unicodeBidi: 'isolate' as any }}>
         <select
           aria-label={`${label} Day`}
           value={selectedDay}
-          onChange={(e) =>
-            commit({
-              ...safeParts,
-              dd: String(Number(e.target.value)).padStart(2, '0'),
-            })
-          }
+          onChange={(e) => commit({ ...safeParts, dd: String(Number(e.target.value)).padStart(2, '0') })}
           className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 bg-white"
         >
           {range(maxDay).map((d) => (
@@ -303,17 +261,16 @@ function ResponsiveDateInput({
           value={selectedYear}
           onChange={(e) => {
             const y = Number(e.target.value);
-            // If switching to min year, ensure month >= min month
-            const newMonth =
-              hasMin && minParts && y === Number(minParts.yyyy) ? Math.max(selectedMonth, Number(minParts.mm)) : selectedMonth;
+            const newMonth = hasMin && minParts && y === Number(minParts.yyyy)
+              ? Math.max(selectedMonth, Number(minParts.mm))
+              : selectedMonth;
 
             const newMax = daysInMonth(y, newMonth);
-            // If switching to min year+month, ensure day >= min day
-            const newDayMin =
-              hasMin && minParts && y === Number(minParts.yyyy) && newMonth === Number(minParts.mm) ? Number(minParts.dd) : 1;
+            const newDayMin = hasMin && minParts && y === Number(minParts.yyyy) && newMonth === Number(minParts.mm)
+              ? Number(minParts.dd)
+              : 1;
 
             const dd = Math.min(Math.max(selectedDay, newDayMin), newMax);
-
             commit({
               yyyy: String(y),
               mm: String(newMonth).padStart(2, '0'),
@@ -332,7 +289,7 @@ function ResponsiveDateInput({
 
       <p className="mt-1 text-xs text-gray-500">
         <LTR>
-          Selected: <DateDisplay value={value || minISO} />
+          Selected: <DateDisplay value={value || fallbackISO} />
         </LTR>
       </p>
     </div>
@@ -380,11 +337,6 @@ export default function Vacation() {
   const [userOffice, setUserOffice] = useState<Office | null>(null);
 
   const [isMobile, setIsMobile] = useState(false);
-
-  const normalizedLeaveType = String(newRequest.leave_type || '').toLowerCase().trim();
-  const isSickLeave = normalizedLeaveType === 'sick' || normalizedLeaveType.includes('sick');
-  const startDateMin = isSickLeave ? undefined : todayISO();
-  const endDateMin = isSickLeave ? undefined : (newRequest.start_date || todayISO());
 
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 640px)');
@@ -465,7 +417,6 @@ export default function Vacation() {
     const to = `${year}-12-31`;
 
     try {
-      // Personal leave requests
       const { data: personalData, error: personalError } = await supabase
         .from('leave_requests')
         .select(
@@ -486,7 +437,6 @@ export default function Vacation() {
       if (personalError) throw personalError;
       setLeaveRequests((personalData || []) as LeaveRequest[]);
 
-      // Team leave requests (based on my pending actions)
       const { data: myPendingActions, error: actErr } = await supabase
         .from('approval_actions')
         .select(
@@ -549,7 +499,6 @@ export default function Vacation() {
       fetchLeaveRequests();
       fetchOfficeData();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
   const isHoliday = (date: Date) => {
@@ -574,7 +523,6 @@ export default function Vacation() {
 
     while (currDate <= end) {
       const dayOfWeek = currDate.getDay();
-      // Fri=5, Sat=6
       if (dayOfWeek !== 5 && dayOfWeek !== 6 && !isHoliday(currDate)) {
         days++;
       }
@@ -605,8 +553,7 @@ export default function Vacation() {
     } else {
       setWorkingDaysCount(0);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [newRequest.start_date, newRequest.end_date]);
+  }, [newRequest.start_date, newRequest.end_date, officeHolidays, userOffice]);
 
   const showConfirmation = (requestId: string, action: 'approve' | 'reject', request: LeaveRequest) => {
     setShowViewModal(false);
@@ -654,32 +601,30 @@ export default function Vacation() {
       if (actionFetchErr) throw actionFetchErr;
       if (!currentAction) throw new Error('No pending approval action found for you. It may have been handled already.');
 
-    const { error: updateErr } = await supabase
-  .from('approval_actions')
-  .update({
-    action: approved ? 'approved' : 'rejected',
-    action_date: new Date().toISOString(),
-    comments: approved ? 'Approved' : 'Rejected',
-  })
-  .eq('id', currentAction.id);
+      const { error: updateErr } = await supabase
+        .from('approval_actions')
+        .update({
+          action: approved ? 'approved' : 'rejected',
+          action_date: new Date().toISOString(),
+          comments: approved ? 'Approved' : 'Rejected',
+        })
+        .eq('id', currentAction.id);
 
-if (updateErr) throw updateErr;
+      if (updateErr) throw updateErr;
 
-// فقط عند الموافقة
-if (approved) {
-  // ننتظر شوي حتى تكتمل تحديثات approval_requests -> leave_requests
-  await new Promise((resolve) => setTimeout(resolve, 800));
+      if (approved) {
+        await new Promise((resolve) => setTimeout(resolve, 800));
 
-  const { error: syncErr } = await supabase.rpc('sync_approved_leaves_to_timesheet');
+        const { error: syncErr } = await supabase.rpc('sync_approved_leaves_to_timesheet');
 
-  if (syncErr) {
-    console.error('Timesheet sync failed:', syncErr);
-    throw new Error(`Timesheet sync failed: ${syncErr.message}`);
-  }
-}
+        if (syncErr) {
+          console.error('Timesheet sync failed:', syncErr);
+          throw new Error(`Timesheet sync failed: ${syncErr.message}`);
+        }
+      }
 
-await Promise.all([fetchLeaveRequests(), refreshBalances()]);
-setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
+      await Promise.all([fetchLeaveRequests(), refreshBalances()]);
+      setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
     } catch (err: any) {
       console.error(err);
       setError(err.message || 'Approval failed');
@@ -711,14 +656,8 @@ setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
         throw new Error('End date cannot be before start date');
       }
 
-      const today = todayISO();
-
-      if (isSickLeave) {
-        if (compareISO(newRequest.start_date, today) > 0 || compareISO(newRequest.end_date, today) > 0) {
-          throw new Error('Sick leave can only be requested for today or previous dates');
-        }
-      } else if (compareISO(newRequest.start_date, today) < 0) {
-        throw new Error('Cannot request leave for past dates');
+      if (workingDays <= 0) {
+        throw new Error('Selected range does not contain any working days');
       }
 
       const availableBalance = getAvailableBalanceWithPending(newRequest.leave_type);
@@ -812,20 +751,14 @@ setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
   };
 
   const renderTableRow = (request: LeaveRequest, showEmployeeName = false) => {
-    const employeeName =
-      `${request.employee?.first_name ?? ''} ${request.employee?.last_name ?? ''}`.trim() || 'Unknown Employee';
+    const employeeName = `${request.employee?.first_name ?? ''} ${request.employee?.last_name ?? ''}`.trim() || 'Unknown Employee';
 
     return (
       <tr key={request.id}>
-        {showEmployeeName && (
-          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{employeeName}</td>
-        )}
+        {showEmployeeName && <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{employeeName}</td>}
 
-        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 capitalize">
-          {request.leave_type} Leave
-        </td>
+        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 capitalize">{request.leave_type} Leave</td>
 
-        {/* ✅ Mobile/RTL-safe date rendering */}
         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
           <span className="inline-flex items-center gap-2" dir="ltr" style={{ unicodeBidi: 'isolate' as any }}>
             <DateDisplay value={request.start_date} />
@@ -884,11 +817,7 @@ setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
   return (
     <div className="min-h-screen bg-gray-100">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <button
-          onClick={() => navigate('/')}
-          className="flex items-center text-gray-600 hover:text-gray-900 mb-6"
-          type="button"
-        >
+        <button onClick={() => navigate('/')} className="flex items-center text-gray-600 hover:text-gray-900 mb-6" type="button">
           <ArrowLeft className="h-4 w-4 mr-2" />
           Back to Dashboard
         </button>
@@ -896,11 +825,7 @@ setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
         <div className="bg-white shadow-lg rounded-lg overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
             <h2 className="text-xl font-semibold text-gray-800">Leave Management</h2>
-            <button
-              onClick={() => setShowModal(true)}
-              className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
-              type="button"
-            >
+            <button onClick={() => setShowModal(true)} className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700" type="button">
               <Plus className="h-4 w-4 mr-2" />
               Request Leave
             </button>
@@ -909,11 +834,7 @@ setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
           <div className="p-6">
             {(error || success) && (
               <div className={`mb-4 ${error ? 'bg-red-50' : 'bg-green-50'} text-${error ? 'red' : 'green'}-700 p-4 rounded-md flex items-start`}>
-                {error ? (
-                  <AlertCircle className="h-5 w-5 mr-2 mt-0.5 flex-shrink-0 text-red-400" />
-                ) : (
-                  <Check className="h-5 w-5 mr-2 mt-0.5 flex-shrink-0 text-green-400" />
-                )}
+                {error ? <AlertCircle className="h-5 w-5 mr-2 mt-0.5 flex-shrink-0 text-red-400" /> : <Check className="h-5 w-5 mr-2 mt-0.5 flex-shrink-0 text-green-400" />}
                 <p>{error || success}</p>
               </div>
             )}
@@ -926,9 +847,7 @@ setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
                     Your Office: {userOffice.name} ({userOffice.location})
                   </span>
                 </div>
-                <p className="mt-2 text-sm text-blue-600">
-                  Note: Leave days are calculated based on your office&apos;s holiday calendar
-                </p>
+                <p className="mt-2 text-sm text-blue-600">Note: Leave days are calculated based on your office&apos;s holiday calendar</p>
               </div>
             )}
 
@@ -940,20 +859,12 @@ setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
                     <p className="text-sm text-green-600 font-medium">Annual Leave</p>
                     <div className="flex items-center">
                       <Info className="h-4 w-4 text-green-600 mr-1" />
-                      <span className="text-xs text-green-600">
-                        <LTR>{calculatePendingDays('annual')} pending</LTR>
-                      </span>
+                      <span className="text-xs text-green-600"><LTR>{calculatePendingDays('annual')} pending</LTR></span>
                     </div>
                   </div>
-                  <p className="text-2xl font-bold text-green-700">
-                    <LTR>{getAvailableDays('annual')} days available</LTR>
-                  </p>
-                  <p className="text-sm text-green-600 mt-1">
-                    <LTR>Total: {getAvailableDays('annual') + calculateApprovedDays('annual')} days</LTR>
-                  </p>
-                  <p className="text-xs text-green-600 mt-1">
-                    <LTR>Used: {calculateApprovedDays('annual')} days</LTR>
-                  </p>
+                  <p className="text-2xl font-bold text-green-700"><LTR>{getAvailableDays('annual')} days available</LTR></p>
+                  <p className="text-sm text-green-600 mt-1"><LTR>Total: {getAvailableDays('annual') + calculateApprovedDays('annual')} days</LTR></p>
+                  <p className="text-xs text-green-600 mt-1"><LTR>Used: {calculateApprovedDays('annual')} days</LTR></p>
                 </div>
 
                 <div className="bg-blue-50 p-4 rounded-lg">
@@ -961,20 +872,12 @@ setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
                     <p className="text-sm text-blue-600 font-medium">Sick Leave</p>
                     <div className="flex items-center">
                       <Info className="h-4 w-4 text-blue-600 mr-1" />
-                      <span className="text-xs text-blue-600">
-                        <LTR>{calculatePendingDays('sick')} pending</LTR>
-                      </span>
+                      <span className="text-xs text-blue-600"><LTR>{calculatePendingDays('sick')} pending</LTR></span>
                     </div>
                   </div>
-                  <p className="text-2xl font-bold text-blue-700">
-                    <LTR>{getAvailableDays('sick')} days available</LTR>
-                  </p>
-                  <p className="text-sm text-blue-600 mt-1">
-                    <LTR>Total: {getAvailableDays('sick') + calculateApprovedDays('sick')} days</LTR>
-                  </p>
-                  <p className="text-xs text-blue-600 mt-1">
-                    <LTR>Used: {calculateApprovedDays('sick')} days</LTR>
-                  </p>
+                  <p className="text-2xl font-bold text-blue-700"><LTR>{getAvailableDays('sick')} days available</LTR></p>
+                  <p className="text-sm text-blue-600 mt-1"><LTR>Total: {getAvailableDays('sick') + calculateApprovedDays('sick')} days</LTR></p>
+                  <p className="text-xs text-blue-600 mt-1"><LTR>Used: {calculateApprovedDays('sick')} days</LTR></p>
                 </div>
 
                 <div className="bg-purple-50 p-4 rounded-lg">
@@ -982,20 +885,12 @@ setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
                     <p className="text-sm text-purple-600 font-medium">Personal Leave</p>
                     <div className="flex items-center">
                       <Info className="h-4 w-4 text-purple-600 mr-1" />
-                      <span className="text-xs text-purple-600">
-                        <LTR>{calculatePendingDays('personal')} pending</LTR>
-                      </span>
+                      <span className="text-xs text-purple-600"><LTR>{calculatePendingDays('personal')} pending</LTR></span>
                     </div>
                   </div>
-                  <p className="text-2xl font-bold text-purple-700">
-                    <LTR>{getAvailableDays('personal')} days available</LTR>
-                  </p>
-                  <p className="text-sm text-purple-600 mt-1">
-                    <LTR>Total: {getAvailableDays('personal') + calculateApprovedDays('personal')} days</LTR>
-                  </p>
-                  <p className="text-xs text-purple-600 mt-1">
-                    <LTR>Used: {calculateApprovedDays('personal')} days</LTR>
-                  </p>
+                  <p className="text-2xl font-bold text-purple-700"><LTR>{getAvailableDays('personal')} days available</LTR></p>
+                  <p className="text-sm text-purple-600 mt-1"><LTR>Total: {getAvailableDays('personal') + calculateApprovedDays('personal')} days</LTR></p>
+                  <p className="text-xs text-purple-600 mt-1"><LTR>Used: {calculateApprovedDays('personal')} days</LTR></p>
                 </div>
               </div>
             </div>
@@ -1006,41 +901,23 @@ setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
             </div>
 
             <div>
-              <h3 className="text-lg font-medium text-gray-900 mb-4">
-                {activeTab === 'personal' ? 'My Leave History' : 'Team Leave History'}
-              </h3>
+              <h3 className="text-lg font-medium text-gray-900 mb-4">{activeTab === 'personal' ? 'My Leave History' : 'Team Leave History'}</h3>
 
               <div className="overflow-x-auto">
                 <table className="min-w-full divide-y divide-gray-200">
                   <thead>
                     <tr>
-                      {activeTab === 'team' && (
-                        <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Employee
-                        </th>
-                      )}
-                      <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Type
-                      </th>
-                      <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Duration
-                      </th>
-                      <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Working Days
-                      </th>
-                      <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Status
-                      </th>
-                      <th className="px-6 py-3 bg-gray-50 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Actions
-                      </th>
+                      {activeTab === 'team' && <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Employee</th>}
+                      <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+                      <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Duration</th>
+                      <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Working Days</th>
+                      <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                      <th className="px-6 py-3 bg-gray-50 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                     </tr>
                   </thead>
 
                   <tbody className="bg-white divide-y divide-gray-200">
-                    {(activeTab === 'personal' ? leaveRequests : teamLeaveRequests).map((request) =>
-                      renderTableRow(request, activeTab === 'team')
-                    )}
+                    {(activeTab === 'personal' ? leaveRequests : teamLeaveRequests).map((request) => renderTableRow(request, activeTab === 'team'))}
                   </tbody>
                 </table>
               </div>
@@ -1049,7 +926,6 @@ setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
         </div>
       </div>
 
-      {/* Modal - Request Leave */}
       {showModal && (
         <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center p-4">
           <div className="bg-white rounded-lg max-w-md w-full p-6">
@@ -1068,14 +944,9 @@ setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
                     value={newRequest.leave_type}
                     onChange={(e) => {
                       const nextLeaveType = e.target.value;
-                      const nextIsSickLeave = nextLeaveType === 'sick' || nextLeaveType.includes('sick');
-                      const today = todayISO();
-
                       setNewRequest((prev) => ({
                         ...prev,
                         leave_type: nextLeaveType,
-                        start_date: nextIsSickLeave ? prev.start_date : (prev.start_date && compareISO(prev.start_date, today) >= 0 ? prev.start_date : ''),
-                        end_date: nextIsSickLeave ? prev.end_date : (prev.end_date && compareISO(prev.end_date, today) >= 0 ? prev.end_date : ''),
                       }));
                     }}
                     className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
@@ -1095,13 +966,12 @@ setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
                 <ResponsiveDateInput
                   label="Start Date"
                   value={newRequest.start_date}
-                  min={startDateMin}
+                  min={undefined}
                   isMobile={isMobile}
                   onChange={(v) => {
                     setNewRequest((prev) => ({
                       ...prev,
                       start_date: v,
-                      // If end is empty or end < start, move end to start
                       end_date: prev.end_date && compareISO(prev.end_date, v) >= 0 ? prev.end_date : v,
                     }));
                   }}
@@ -1110,37 +980,25 @@ setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
                 <ResponsiveDateInput
                   label="End Date"
                   value={newRequest.end_date}
-                  min={endDateMin}
+                  min={undefined}
                   isMobile={isMobile}
                   onChange={(v) => {
                     setNewRequest((prev) => ({
                       ...prev,
-                      end_date: compareISO(v, prev.start_date || v) < 0 ? (prev.start_date || v) : v,
+                      end_date: compareISO(v, prev.start_date || v) < 0 ? prev.start_date || v : v,
                     }));
                   }}
                 />
 
-                {isSickLeave && (
-                  <div className="bg-amber-50 text-amber-700 text-sm p-3 rounded-md">
-                    Sick leave can be requested for today or previous dates. Future dates are not allowed.
-                  </div>
-                )}
+                <div className="bg-blue-50 text-blue-700 text-sm p-3 rounded-md">
+                  You can now request leave for past dates, today, or future dates.
+                </div>
 
                 {workingDaysCount > 0 && (
-                  <div
-                    className={`text-sm p-3 rounded-md ${
-                      workingDaysCount > getAvailableBalanceWithPending(newRequest.leave_type)
-                        ? 'bg-red-50 text-red-700'
-                        : 'bg-blue-50 text-blue-700'
-                    }`}
-                  >
+                  <div className={`text-sm p-3 rounded-md ${workingDaysCount > getAvailableBalanceWithPending(newRequest.leave_type) ? 'bg-red-50 text-red-700' : 'bg-blue-50 text-blue-700'}`}>
                     <div className="flex items-start">
                       <div className="flex-shrink-0">
-                        {workingDaysCount > getAvailableBalanceWithPending(newRequest.leave_type) ? (
-                          <AlertTriangle className="h-5 w-5 text-red-400" />
-                        ) : (
-                          <Info className="h-5 w-5 text-blue-400" />
-                        )}
+                        {workingDaysCount > getAvailableBalanceWithPending(newRequest.leave_type) ? <AlertTriangle className="h-5 w-5 text-red-400" /> : <Info className="h-5 w-5 text-blue-400" />}
                       </div>
                       <div className="ml-3">
                         <p className="font-medium"><LTR>{workingDaysCount} working days required</LTR></p>
@@ -1151,9 +1009,7 @@ setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
                               : `You will have ${getAvailableBalanceWithPending(newRequest.leave_type) - workingDaysCount} days remaining after this request.`}
                           </LTR>
                         </p>
-                        {officeHolidays.length > 0 && (
-                          <p className="mt-1 text-xs">Note: Office holidays are automatically excluded from working days calculation.</p>
-                        )}
+                        {officeHolidays.length > 0 && <p className="mt-1 text-xs">Note: Office holidays are automatically excluded from working days calculation.</p>}
                       </div>
                     </div>
                   </div>
@@ -1172,20 +1028,13 @@ setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
               </div>
 
               <div className="mt-6 flex justify-end">
-                <button
-                  type="button"
-                  onClick={() => setShowModal(false)}
-                  className="mr-3 px-4 py-2 text-sm font-medium text-gray-700 hover:text-gray-500"
-                >
+                <button type="button" onClick={() => setShowModal(false)} className="mr-3 px-4 py-2 text-sm font-medium text-gray-700 hover:text-gray-500">
                   Cancel
                 </button>
 
                 <button
                   type="submit"
-                  disabled={
-                    isSubmitting ||
-                    (workingDaysCount > 0 && workingDaysCount > getAvailableBalanceWithPending(newRequest.leave_type))
-                  }
+                  disabled={isSubmitting || (workingDaysCount > 0 && workingDaysCount > getAvailableBalanceWithPending(newRequest.leave_type))}
                   className="inline-flex justify-center px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
                 >
                   {isSubmitting ? (
@@ -1206,7 +1055,6 @@ setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
         </div>
       )}
 
-      {/* Modal - View Request Details */}
       {showViewModal && selectedRequest && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full transform transition-all">
@@ -1229,19 +1077,9 @@ setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
             <div className="px-6 py-4">
               <div className="space-y-6">
                 <div className="flex justify-center">
-                  <span
-                    className={`inline-flex items-center px-4 py-2 rounded-full text-sm font-medium ${getStatusBadgeColor(
-                      selectedRequest.manager_approval_status
-                    )}`}
-                  >
+                  <span className={`inline-flex items-center px-4 py-2 rounded-full text-sm font-medium ${getStatusBadgeColor(selectedRequest.manager_approval_status)}`}>
                     <div className="flex items-center space-x-2">
-                      {selectedRequest.manager_approval_status === 'approved' ? (
-                        <CheckCircle2 className="h-4 w-4" />
-                      ) : selectedRequest.manager_approval_status === 'rejected' ? (
-                        <X className="h-4 w-4" />
-                      ) : (
-                        <Clock className="h-4 w-4" />
-                      )}
+                      {selectedRequest.manager_approval_status === 'approved' ? <CheckCircle2 className="h-4 w-4" /> : selectedRequest.manager_approval_status === 'rejected' ? <X className="h-4 w-4" /> : <Clock className="h-4 w-4" />}
                       <span>{formatStatus(selectedRequest.manager_approval_status)}</span>
                     </div>
                   </span>
@@ -1251,28 +1089,21 @@ setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-sm font-medium text-gray-500">Leave Type</p>
-                      <p className="mt-1 text-lg font-semibold text-gray-900 capitalize">
-                        {selectedRequest.leave_type} Leave
-                      </p>
+                      <p className="mt-1 text-lg font-semibold text-gray-900 capitalize">{selectedRequest.leave_type} Leave</p>
                     </div>
                     <Calendar className="h-8 w-8 text-blue-500" />
                   </div>
                 </div>
 
-                {/* ✅ Mobile/RTL-safe date rendering inside modal */}
                 <div className="grid grid-cols-2 gap-4">
                   <div className="bg-gray-50 rounded-lg p-4">
                     <p className="text-sm font-medium text-gray-500">Start Date</p>
-                    <p className="mt-1 text-base text-gray-900">
-                      <DateDisplay value={selectedRequest.start_date} />
-                    </p>
+                    <p className="mt-1 text-base text-gray-900"><DateDisplay value={selectedRequest.start_date} /></p>
                   </div>
 
                   <div className="bg-gray-50 rounded-lg p-4">
                     <p className="text-sm font-medium text-gray-500">End Date</p>
-                    <p className="mt-1 text-base text-gray-900">
-                      <DateDisplay value={selectedRequest.end_date} />
-                    </p>
+                    <p className="mt-1 text-base text-gray-900"><DateDisplay value={selectedRequest.end_date} /></p>
                   </div>
                 </div>
 
@@ -1280,9 +1111,7 @@ setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-sm font-medium text-blue-700">Working Days</p>
-                      <p className="mt-1 text-2xl font-bold text-blue-900">
-                        <LTR>{calculateWorkingDays(selectedRequest.start_date, selectedRequest.end_date)}</LTR>
-                      </p>
+                      <p className="mt-1 text-2xl font-bold text-blue-900"><LTR>{calculateWorkingDays(selectedRequest.start_date, selectedRequest.end_date)}</LTR></p>
                     </div>
                     <div className="h-12 w-12 bg-blue-100 rounded-full flex items-center justify-center">
                       <Calendar className="h-6 w-6 text-blue-600" />
@@ -1300,12 +1129,8 @@ setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
                 <div>
                   <p className="text-sm font-medium text-gray-500 mb-2">Manager Status</p>
                   <div className="bg-gray-50 rounded-lg p-4">
-                    <p className="text-sm font-medium text-gray-700">
-                      Status: {formatStatus(selectedRequest.manager_approval_status)}
-                    </p>
-                    {selectedRequest.manager_comments && (
-                      <p className="text-sm text-gray-600 mt-1">Comments: {selectedRequest.manager_comments}</p>
-                    )}
+                    <p className="text-sm font-medium text-gray-700">Status: {formatStatus(selectedRequest.manager_approval_status)}</p>
+                    {selectedRequest.manager_comments && <p className="text-sm text-gray-600 mt-1">Comments: {selectedRequest.manager_comments}</p>}
                   </div>
                 </div>
 
@@ -1313,18 +1138,10 @@ setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
                   <div className="mt-4">
                     <p className="text-sm font-medium text-gray-500 mb-2">Your Action</p>
                     <div className="flex space-x-4">
-                      <button
-                        onClick={() => showConfirmation(selectedRequest.id, 'approve', selectedRequest)}
-                        className="flex-1 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
-                        type="button"
-                      >
+                      <button onClick={() => showConfirmation(selectedRequest.id, 'approve', selectedRequest)} className="flex-1 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700" type="button">
                         Approve
                       </button>
-                      <button
-                        onClick={() => showConfirmation(selectedRequest.id, 'reject', selectedRequest)}
-                        className="flex-1 px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
-                        type="button"
-                      >
+                      <button onClick={() => showConfirmation(selectedRequest.id, 'reject', selectedRequest)} className="flex-1 px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700" type="button">
                         Reject
                       </button>
                     </div>
@@ -1349,7 +1166,6 @@ setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
         </div>
       )}
 
-      {/* Confirmation Dialog */}
       {confirmation.show && (
         <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center p-4 z-[60]">
           <div className="bg-white rounded-lg max-w-md w-full p-6">
@@ -1390,20 +1206,12 @@ setSuccess(approved ? 'Approved successfully' : 'Rejected successfully');
                   handleApproval(confirmation.action === 'approve', confirmation.request);
                 }}
                 className={`px-4 py-2 text-sm font-medium text-white rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 ${
-                  confirmation.action === 'approve'
-                    ? 'bg-green-600 hover:bg-green-700 focus:ring-green-500'
-                    : 'bg-red-600 hover:bg-red-700 focus:ring-red-500'
+                  confirmation.action === 'approve' ? 'bg-green-600 hover:bg-green-700 focus:ring-green-500' : 'bg-red-600 hover:bg-red-700 focus:ring-red-500'
                 }`}
                 disabled={isSubmitting}
                 type="button"
               >
-                {isSubmitting ? (
-                  <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-white" />
-                ) : confirmation.action === 'approve' ? (
-                  'Approve'
-                ) : (
-                  'Reject'
-                )}
+                {isSubmitting ? <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-white" /> : confirmation.action === 'approve' ? 'Approve' : 'Reject'}
               </button>
             </div>
           </div>
